@@ -42,6 +42,7 @@ let seats = [];
 let reservations = []; // { id, className, number, name, type, size, groupCode, members, skipCount, priorityLocked, status, seatIds }
 let currentTurnIndex = -1;
 let adminStarted = false;
+let reservationsOpen = false;
 
 function makeSeats(tableId, count) {
   return Array.from({ length: count }, (_, i) => ({
@@ -110,6 +111,7 @@ function broadcastState() {
     })),
     currentTurnIndex,
     adminStarted,
+    reservationsOpen,   // 이 줄 추가
   });
 }
 
@@ -128,6 +130,7 @@ socket.on('admin:login', (password) => {
   broadcastState();
 
   socket.on('reserve:solo', ({ className, number, name }) => {
+    if (!reservationsOpen) { socket.emit('reserve:error', '아직 예약을 받지 않아요'); return; }
     reservations.push({
       id: `r${Date.now()}${Math.floor(Math.random() * 1000)}`,
       className, number, name, type: 'solo', size: 1,
@@ -141,6 +144,7 @@ socket.on('admin:login', (password) => {
   });
 
   socket.on('group:create', ({ className, number, name, size }) => {
+    if (!reservationsOpen) { socket.emit('reserve:error', '아직 예약을 받지 않아요'); return; }
     const code = Math.random().toString(36).slice(2, 6).toUpperCase();
     reservations.push({
       id: `r${Date.now()}${Math.floor(Math.random() * 1000)}`,
@@ -162,6 +166,12 @@ socket.on('admin:login', (password) => {
       return;
     }
     target.members.push({ className, number, name });
+    broadcastState();
+  });
+
+  socket.on('admin:openReservations', () => {
+    if (!socket.data.isAdmin) return;
+    reservationsOpen = true;
     broadcastState();
   });
 
@@ -207,6 +217,7 @@ socket.on('admin:login', (password) => {
     resetSeats();
     currentTurnIndex = -1;
     adminStarted = false;
+    reservationsOpen = false;   // 이 줄 추가
     broadcastState();
   });
 });

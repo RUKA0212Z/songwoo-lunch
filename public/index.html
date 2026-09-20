@@ -183,8 +183,7 @@
 <div id="app">
 
   <!-- ============ 로그인 ============ -->
-  <div id="loginScreen">
-    <div class="login-card">
+  <div class="login-card">
   <h2 id="loginTitle" onclick="handleTitleTap()" style="cursor:default;">급식줄 예약</h2>
   <div class="desc">반/번호/이름을 입력하고 입장하세요</div>
   <input type="text" id="loginName" placeholder="이름">
@@ -197,12 +196,12 @@
     <button class="btn btn-primary" onclick="login(false)">학생으로 입장</button>
   </div>
 
-  <!-- 평소엔 숨겨져 있는 관리자 진입창 -->
   <div id="adminSecretBox" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line);">
     <input type="text" id="adminPasswordInput" placeholder="관리자 비밀번호">
     <button class="btn btn-outline" style="margin-top:10px;" onclick="tryAdminLogin()">관리자 인증</button>
   </div>
 </div>
+
   </div>
 
   <div class="topbar">
@@ -246,10 +245,10 @@
 
       <div class="card" id="adminCard" style="display:none;">
         <h2>관리자 컨트롤</h2>
-        <button class="btn btn-primary" id="startBtn" onclick="adminStart()">좌석 배정 시작</button>
+        <button class="btn btn-orange" id="openBtn" onclick="adminOpenReservations()">예약 시작</button>
+        <button class="btn btn-primary" id="startBtn" style="margin-top:10px;" onclick="adminStart()">좌석 배정 시작</button>
         <button class="btn btn-outline" style="margin-top:10px;" onclick="adminReset()">전체 초기화</button>
       </div>
-    </div>
 
     <!-- ============ 좌석 지도 ============ -->
     <div class="screen" id="screen-map" style="padding-top:18px;">
@@ -334,48 +333,7 @@
 </div>
 
 <script>
-// 제목 5번 탭 감지
-let titleTapCount = 0;
-let titleTapTimer = null;
-function handleTitleTap(){
-  titleTapCount++;
-  clearTimeout(titleTapTimer);
-  titleTapTimer = setTimeout(() => { titleTapCount = 0; }, 1500);
-  if(titleTapCount >= 5){
-    titleTapCount = 0;
-    document.getElementById('adminSecretBox').style.display = 'block';
-  }
-}
-
-// 관리자 비밀번호 확인 (서버에 물어봄)
-let adminAuthSocket = null;
-function tryAdminLogin(){
-  const pw = document.getElementById('adminPasswordInput').value;
-  if(!pw){ showToast('비밀번호를 입력하세요'); return; }
-
-  adminAuthSocket = io();
-  adminAuthSocket.emit('admin:login', pw);
-  adminAuthSocket.on('admin:loginResult', ({ success }) => {
-    if(success){
-      me = { className:'', number:'', name:'관리자', isAdmin:true };
-      document.getElementById('loginScreen').style.display = 'none';
-      document.getElementById('userLabel').textContent = '관리자 모드';
-      document.getElementById('reserveCard').style.display = 'none';
-      document.getElementById('adminCard').style.display = 'block';
-
-      socket = adminAuthSocket;
-      socket.on('state', (s) => { state = s; render(); });
-      socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
-      socket.on('group:joinError', (msg) => showToast(msg));
-      loadMeal();
-    } else {
-      showToast('비밀번호가 틀렸어요');
-      adminAuthSocket.disconnect();
-    }
-  });
-}
-
-  const classSel = document.getElementById('loginClass');
+ const classSel = document.getElementById('loginClass');
   const numSel = document.getElementById('loginNumber');
   for(let i=1;i<=10;i++){ const o=document.createElement('option'); o.value=i; o.textContent=`${i}반`; classSel.appendChild(o); }
   for(let i=1;i<=21;i++){ const o=document.createElement('option'); o.value=i; o.textContent=`${i}번`; numSel.appendChild(o); }
@@ -386,27 +344,69 @@ function tryAdminLogin(){
   let prevMyStatus = null;
   let prevMyLocked = false;
 
+  // ---------- 관리자 숨김 진입 ----------
+  let titleTapCount = 0;
+  let titleTapTimer = null;
+  function handleTitleTap(){
+    titleTapCount++;
+    clearTimeout(titleTapTimer);
+    titleTapTimer = setTimeout(() => { titleTapCount = 0; }, 1500);
+    if(titleTapCount >= 5){
+      titleTapCount = 0;
+      document.getElementById('adminSecretBox').style.display = 'block';
+    }
+  }
+
+  function tryAdminLogin(){
+    const pw = document.getElementById('adminPasswordInput').value;
+    if(!pw){ showToast('비밀번호를 입력하세요'); return; }
+
+    const adminSocket = io();
+    adminSocket.emit('admin:login', pw);
+    adminSocket.on('admin:loginResult', ({ success }) => {
+      if(success){
+        me = { className:'', number:'', name:'관리자', isAdmin:true };
+        document.getElementById('loginScreen').style.display = 'none';
+        document.getElementById('userLabel').textContent = '관리자 모드';
+        document.getElementById('reserveCard').style.display = 'none';
+        document.getElementById('adminCard').style.display = 'block';
+
+        socket = adminSocket;
+        socket.on('state', (s) => { state = s; render(); });
+        socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
+        socket.on('group:joinError', (msg) => showToast(msg));
+        socket.on('reserve:error', (msg) => showToast(msg));
+        loadMeal();
+      } else {
+        showToast('비밀번호가 틀렸어요');
+        adminSocket.disconnect();
+      }
+    });
+  }
+
+  // ---------- 학생 로그인 ----------
   function login(isAdmin){
     const name = document.getElementById('loginName').value.trim();
     const className = classSel.value;
     const number = numSel.value;
 
-    if(!isAdmin && !name){
+    if(!name){
       document.getElementById('loginError').style.display = 'block';
       return;
     }
     document.getElementById('loginError').style.display = 'none';
 
-    me = { className, number, name: name || '관리자', isAdmin };
+    me = { className, number, name, isAdmin: false };
     document.getElementById('loginScreen').style.display = 'none';
-    document.getElementById('userLabel').textContent = isAdmin ? '관리자 모드' : `${className}반 ${number}번 · ${name}`;
-    document.getElementById('reserveCard').style.display = isAdmin ? 'none' : 'block';
-    document.getElementById('adminCard').style.display = isAdmin ? 'block' : 'none';
+    document.getElementById('userLabel').textContent = `${className}반 ${number}번 · ${name}`;
+    document.getElementById('reserveCard').style.display = 'block';
+    document.getElementById('adminCard').style.display = 'none';
 
     socket = io();
     socket.on('state', (s) => { state = s; render(); });
     socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
     socket.on('group:joinError', (msg) => showToast(msg));
+    socket.on('reserve:error', (msg) => showToast(msg));
 
     loadMeal();
   }
@@ -468,6 +468,7 @@ function tryAdminLogin(){
     socket.emit('group:join', { className: me.className, number: me.number, name: me.name, code });
     closeModal('modalGroup');
   }
+  function adminOpenReservations(){ socket.emit('admin:openReservations'); }
   function adminStart(){ socket.emit('admin:start'); }
   function adminReset(){ socket.emit('admin:reset'); }
   function confirmSeat(){
@@ -506,10 +507,17 @@ function tryAdminLogin(){
       document.getElementById('releaseBtn').style.display = 'none';
     }
 
-    document.getElementById('currentServingText').textContent =
-      !state.adminStarted ? '아직 배정 시작 전이에요' :
-      state.currentTurnIndex === -2 ? '대기열이 모두 처리됐어요' :
-      `현재 진행 순번: ${state.currentTurnIndex + 1}번`;
+    if(!state.reservationsOpen){
+      document.getElementById('currentServingText').textContent = '예약 시작 전이에요';
+    } else {
+      document.getElementById('currentServingText').textContent =
+        !state.adminStarted ? '예약 받는 중이에요' :
+        state.currentTurnIndex === -2 ? '대기열이 모두 처리됐어요' :
+        `현재 진행 순번: ${state.currentTurnIndex + 1}번`;
+    }
+
+    const reserveButtons = document.querySelectorAll('#reserveCard .btn');
+    reserveButtons.forEach(b => b.disabled = !state.reservationsOpen);
 
     const groupCard = document.getElementById('groupStatusCard');
     if(mine && mine.type === 'group'){
@@ -577,6 +585,12 @@ function tryAdminLogin(){
 
     document.getElementById('accountText').textContent =
       me.isAdmin ? '관리자 계정' : `${me.className}반 ${me.number}번 · ${me.name}`;
+
+    const openBtn = document.getElementById('openBtn');
+    if(openBtn){
+      openBtn.textContent = state.reservationsOpen ? '예약 받는 중' : '예약 시작';
+      openBtn.disabled = state.reservationsOpen;
+    }
   }
 </script>
 </body>
