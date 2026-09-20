@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>급식줄 예약</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  :root{
+    --ink:#3b2226;
+    --primary:#39b7c3;
+    --primary-deep:#9df1a4;
+    --orange:#39b7c3;
+    --orange-deep:#f7f7f7;
+    --orange-soft:#43b8c398;
+    --pink-soft:#ffd9de;
+    --yellow:#efefef;
+    --yellow-soft:#fff0c2;
+    --yellow-deep:#c98f1f;
+    --bg:#fff4ec;
+    --card:#ffffff;
+    --text:#3b2226;
+    --sub:#af8983;
+    --line:#ffe6d8;
+    --danger:#ce3535;
+    --danger-soft:#ffe1e8;
+    --seat-empty:#aeb1b3b3;
+    --seat-full:#f03535e7;
+    --seat-mine:#70ef59;
+    --radius-lg:22px;
+    --radius-md:16px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    font-family:'Pretendard','Apple SD Gothic Neo',sans-serif;
+    background:#f4d9c8;
+    display:flex; justify-content:center;
+  }
+  #app{
+    width:100%; max-width:430px;
+    height:100dvh;
+    background:var(--bg);
+    position:relative;
+    display:flex; flex-direction:column;
+    overflow:hidden;
+  }
+
+  /* ---------- 로그인 ---------- */
+  #loginScreen{
+    position:absolute; inset:0; z-index:100;
+    background:linear-gradient(150deg, var(--primary) 0%, var(--primary-deep) 100%);
+    display:flex; align-items:center; justify-content:center;
+    padding:24px;
+  }
+  .login-card{background:#fff; border-radius:var(--radius-lg); padding:26px 22px; width:100%; box-shadow:0 14px 34px rgba(0,0,0,.18);}
+  .login-card h2{font-size:19px; font-weight:800; color:var(--ink); margin-bottom:4px;}
+  .login-card .desc{font-size:13px; color:var(--sub); margin-bottom:18px;}
+  .login-row{display:flex; gap:8px; margin-bottom:10px;}
+  select, input[type=text]{
+    width:100%; padding:13px; border-radius:12px; border:1.5px solid var(--line);
+    font-size:14.5px; outline:none; background:#fffaf6; color:var(--ink); margin-top:8px;
+  }
+  select:focus, input[type=text]:focus{border-color:var(--primary);}
+  .login-tabs{display:flex; gap:8px; margin-top:16px;}
+  .login-tabs .btn{margin-top:0;}
+  #loginError{color:var(--danger); font-size:12.5px; margin-top:8px; display:none;}
+
+  /* ---------- header ---------- */
+  .topbar{
+    flex-shrink:0;
+    padding:calc(env(safe-area-inset-top,0px) + 12px) 22px 18px;
+    background:linear-gradient(150deg, var(--primary) 0%, var(--primary-deep) 100%);
+    color:#fff; position:relative;
+  }
+  .topbar .greet{font-size:12px; color:#ffd9d3; letter-spacing:.3px; font-weight:500;}
+  .topbar h1{font-size:19px; font-weight:800; margin-top:3px; letter-spacing:-.3px;}
+
+  .content-area{flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; position:relative;}
+  .screen{display:none; padding:0 20px 28px;}
+  .screen.active{display:block;}
+
+  .hero-card{
+    margin-top:-10px; background:var(--card); border-radius:var(--radius-lg);
+    padding:22px; box-shadow:0 10px 26px rgba(230,68,79,.14); margin-bottom:16px;
+  }
+  .hero-top{display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;}
+  .hero-label{font-size:13px; color:var(--sub); font-weight:600;}
+  .live-dot{width:7px; height:7px; border-radius:50%; background:var(--orange); display:inline-block; margin-right:5px; box-shadow:0 0 0 4px var(--orange-soft);}
+  .hero-row{display:flex; align-items:flex-end; gap:6px; margin:6px 0 10px;}
+  .hero-num{font-size:44px; font-weight:800; color:var(--ink); line-height:1;}
+  .hero-unit{font-size:14px; color:var(--sub); font-weight:600; padding-bottom:6px;}
+  .hero-sub{font-size:13px; color:var(--sub);}
+  .chip{display:inline-flex; align-items:center; padding:6px 12px; border-radius:20px; font-size:12px; font-weight:700;}
+  .chip-orange{background:var(--orange-soft); color:var(--orange-deep);}
+  .chip-danger{background:var(--danger-soft); color:var(--danger);}
+  .chip-yellow{background:var(--yellow-soft); color:var(--yellow-deep);}
+
+  .card{background:var(--card); border-radius:var(--radius-lg); padding:20px; box-shadow:0 4px 14px rgba(230,68,79,.06); margin-bottom:14px;}
+  .card h2{font-size:14px; color:var(--text); font-weight:700; margin-bottom:12px; display:flex; align-items:center; gap:6px;}
+
+  .btn{
+    display:flex; align-items:center; justify-content:center; gap:6px;
+    width:100%; text-align:center; padding:14px; border:none; border-radius:14px;
+    font-size:14.5px; font-weight:700; cursor:pointer; transition:transform .12s ease;
+  }
+  .btn:active{transform:scale(.97);}
+  .btn-primary{background:var(--primary); color:#fff;}
+  .btn-orange{background:var(--orange); color:#fff;}
+  .btn-outline{background:#fff; border:1.5px solid var(--line); color:var(--text);}
+  .btn-ghost{background:transparent; color:var(--sub); font-weight:600; font-size:13px; padding:10px;}
+  .btn:disabled{opacity:.4; cursor:not-allowed;}
+
+  .two-col{display:flex; gap:10px;}
+  .two-col .btn{margin-top:0;}
+
+  /* 급식 메뉴 카드 */
+  .menu-date{font-size:12px; color:var(--sub); font-weight:600; margin-bottom:2px;}
+  .menu-list{display:flex; flex-direction:column; gap:8px; margin-top:10px;}
+  .menu-item{display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--line); font-size:14px;}
+  .menu-item:last-child{border-bottom:none;}
+  .menu-icon{width:30px; height:30px; border-radius:9px; background:var(--orange-soft); display:flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0;}
+
+  /* 좌석 지도 */
+  .legend{display:flex; gap:16px; margin:2px 0 16px; font-size:12px; color:var(--sub); font-weight:600;}
+  .legend span{display:flex; align-items:center; gap:6px;}
+  .dot{width:10px; height:10px; border-radius:4px; display:inline-block;}
+  .table-block{margin-bottom:16px;}
+  .table-label{font-size:12px; font-weight:800; color:var(--primary-deep); margin-bottom:8px; display:flex; align-items:center; gap:6px;}
+  .table-label::before{content:""; width:4px; height:12px; background:var(--primary); border-radius:2px;}
+  .seat-grid{display:grid; grid-template-columns:repeat(6,1fr); gap:7px;}
+  .seat{aspect-ratio:1; border-radius:9px; background:var(--seat-empty); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#d9a692;}
+  .seat.full{background:var(--seat-full); color:#fff;}
+  .seat.mine{background:var(--seat-mine); color:#fff; box-shadow:0 0 0 2.5px #fff, 0 0 0 5px var(--seat-mine);}
+
+  /* 차례 알림 */
+  #turnAlert{
+    display:none; position:absolute; inset:0; z-index:50;
+    background:linear-gradient(180deg, var(--primary-deep) 0%, #b8323e 100%); color:#fff;
+    flex-direction:column; align-items:center; justify-content:center; padding:36px; text-align:center;
+  }
+  #turnAlert.active{display:flex;}
+  #turnAlert .label{color:#ffd9d3; font-size:13px; letter-spacing:1.5px; font-weight:700;}
+  #turnAlert .seatnum{font-size:38px; font-weight:800; margin:16px 0 8px; letter-spacing:-1px;}
+  .scan-circle{
+    width:150px; height:150px; border-radius:50%; border:2px dashed rgba(255,255,255,.4);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;
+    font-size:12.5px; color:#ffe7e2; margin-bottom:28px; cursor:pointer; font-weight:600;
+  }
+
+  #toast{
+    position:absolute; bottom:96px; left:50%; transform:translateX(-50%) translateY(20px);
+    background:var(--ink); color:#fff; padding:12px 22px; border-radius:30px;
+    font-size:13px; font-weight:600; opacity:0; transition:.3s; z-index:60; white-space:nowrap;
+    box-shadow:0 8px 20px rgba(0,0,0,.2);
+  }
+  #toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+  .navbar{
+    flex-shrink:0; background:#fff; border-top:1px solid var(--line);
+    display:flex; padding:9px 6px calc(env(safe-area-inset-bottom,0px) + 9px);
+    position:relative; z-index:20;
+  }
+  .nav-item{flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; color:#e3b8ac; font-size:11px; font-weight:700; cursor:pointer; padding:5px 0;}
+  .nav-item.active{color:var(--primary);}
+  .nav-icon{width:23px; height:23px; display:flex; align-items:center; justify-content:center;}
+  .nav-icon svg{width:22px; height:22px;}
+
+  .history-item{display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); font-size:13.5px;}
+  .history-item:last-child{border-bottom:none;}
+  .tag{font-size:11px; padding:4px 9px; border-radius:10px; font-weight:700;}
+  .tag.ok{background:var(--yellow-soft); color:var(--yellow-deep);}
+  .tag.skip{background:var(--danger-soft); color:var(--danger);}
+  .tag.wait{background:#eee; color:#888;}
+
+  .modal-bg{display:none; position:absolute; inset:0; background:rgba(59,34,38,.5); align-items:flex-end; justify-content:center; z-index:40;}
+  .modal-bg.active{display:flex;}
+  .modal{background:#fff; width:100%; border-radius:24px 24px 0 0; padding:26px 22px calc(env(safe-area-inset-bottom,0px) + 30px);}
+  .modal h3{font-size:17px; margin-bottom:16px; font-weight:800; color:var(--ink);}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ 로그인 ============ -->
+  <div id="loginScreen">
+    <div class="login-card">
+      <h2>급식줄 예약</h2>
+      <div class="desc">반/번호/이름을 입력하고 입장하세요</div>
+      <input type="text" id="loginName" placeholder="이름">
+      <div class="login-row">
+        <select id="loginClass"></select>
+        <select id="loginNumber"></select>
+      </div>
+      <div id="loginError">반/번호/이름을 모두 입력해주세요</div>
+      <div class="login-tabs">
+        <button class="btn btn-primary" onclick="login(false)">학생으로 입장</button>
+        <button class="btn btn-outline" onclick="login(true)">관리자</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="topbar">
+    <div class="greet">송우고 급식 예약</div>
+    <h1 id="userLabel">오늘의 급식</h1>
+  </div>
+
+  <div class="content-area">
+
+    <!-- ============ 홈 ============ -->
+    <div class="screen active" id="screen-home">
+      <div class="hero-card">
+        <div class="hero-top">
+          <span class="hero-label"><span class="live-dot"></span>내 대기 순번</span>
+          <span class="chip chip-orange" id="statusChip">예약 전</span>
+        </div>
+        <div class="hero-row"><span class="hero-num" id="myQueueNum">-</span><span class="hero-unit">번째</span></div>
+        <div class="hero-sub" id="currentServingText">아직 시작 전이에요</div>
+        <button class="btn btn-outline" id="releaseBtn" style="display:none; margin-top:14px;" onclick="releaseSeat()">취식 완료 (퇴식)</button>
+      </div>
+
+      <div class="card" id="reserveCard">
+        <h2>예약 방식</h2>
+        <div class="two-col">
+          <button class="btn btn-primary" onclick="openModal('modalSolo')">개인 예약</button>
+          <button class="btn btn-outline" onclick="openModal('modalGroup')">모둠 예약</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>🍱 오늘의 급식</h2>
+        <div class="menu-date" id="mealDate">불러오는 중...</div>
+        <div class="menu-list" id="mealList"></div>
+      </div>
+
+      <div class="card" id="groupStatusCard" style="display:none;">
+        <h2>현재 모둠 상태</h2>
+        <div class="hero-sub" id="groupInfoText" style="margin-bottom:10px;"></div>
+        <span class="chip chip-danger" id="groupSkipChip" style="display:none;">스킵 1회 · 우선 확보 대기중</span>
+      </div>
+
+      <div class="card" id="adminCard" style="display:none;">
+        <h2>관리자 컨트롤</h2>
+        <button class="btn btn-primary" id="startBtn" onclick="adminStart()">좌석 배정 시작</button>
+        <button class="btn btn-outline" style="margin-top:10px;" onclick="adminReset()">전체 초기화</button>
+      </div>
+    </div>
+
+    <!-- ============ 좌석 지도 ============ -->
+    <div class="screen" id="screen-map" style="padding-top:18px;">
+      <div class="legend">
+        <span><i class="dot" style="background:var(--seat-empty);"></i>빈자리</span>
+        <span><i class="dot" style="background:var(--seat-full);"></i>착석중</span>
+        <span><i class="dot" style="background:var(--seat-mine);"></i>내 자리</span>
+      </div>
+      <div id="seatMapContainer"></div>
+    </div>
+
+    <!-- ============ 마이페이지 ============ -->
+    <div class="screen" id="screen-my" style="padding-top:18px;">
+      <div class="card">
+        <h2>예약 대기열 전체</h2>
+        <div id="queueList"></div>
+      </div>
+      <div class="card">
+        <h2>계정</h2>
+        <div class="hero-sub" id="accountText">-</div>
+        <button class="btn btn-outline" style="margin-top:14px;" onclick="location.reload()">로그아웃</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ============ 차례 알림 ============ -->
+  <div id="turnAlert">
+    <div class="label">내 차례입니다</div>
+    <div class="seatnum">착석 인증을 진행하세요</div>
+    <div class="scan-circle" onclick="confirmSeat()">
+      <span style="font-size:22px;">▢</span>QR / NFC 스캔
+    </div>
+  </div>
+
+  <!-- ============ 모달: 개인예약 ============ -->
+  <div class="modal-bg" id="modalSolo" onclick="if(event.target===this) closeModal('modalSolo')">
+    <div class="modal">
+      <h3>개인 예약 확인</h3>
+      <p class="hero-sub" style="margin-bottom:16px;">본인 순번으로만 예약됩니다. 좌석은 차례가 되면 자동 배정돼요.</p>
+      <button class="btn btn-primary" onclick="reserveSolo()">예약하기</button>
+      <button class="btn btn-ghost" onclick="closeModal('modalSolo')">취소</button>
+    </div>
+  </div>
+
+  <!-- ============ 모달: 모둠예약 ============ -->
+  <div class="modal-bg" id="modalGroup" onclick="if(event.target===this) closeModal('modalGroup')">
+    <div class="modal">
+      <h3>모둠 예약</h3>
+      <div class="two-col" style="margin-bottom:14px;">
+        <button class="btn btn-primary" id="tabCreate" onclick="switchGroupTab('create')">코드 생성</button>
+        <button class="btn btn-outline" id="tabJoin" onclick="switchGroupTab('join')">코드 입력</button>
+      </div>
+      <div id="groupCreateBox">
+        <p class="hero-sub">모둠 인원 수를 입력하면 코드가 발급됩니다.</p>
+        <input type="text" id="groupSizeInput" placeholder="모둠 인원 수 (예: 6)">
+        <button class="btn btn-orange" style="margin-top:14px;" onclick="createGroup()">코드 발급받기</button>
+      </div>
+      <div id="groupJoinBox" style="display:none;">
+        <p class="hero-sub">모둠장에게 받은 코드를 입력하세요.</p>
+        <input type="text" id="groupCodeInput" placeholder="모둠 코드 입력">
+        <button class="btn btn-orange" style="margin-top:14px;" onclick="joinGroup()">참여하기</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <!-- ============ 하단 네비게이션 ============ -->
+  <div class="navbar">
+    <div class="nav-item active" data-screen="screen-home" onclick="switchScreen('screen-home', this)">
+      <div class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg></div>홈
+    </div>
+    <div class="nav-item" data-screen="screen-map" onclick="switchScreen('screen-map', this)">
+      <div class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></div>좌석지도
+    </div>
+    <div class="nav-item" data-screen="screen-my" onclick="switchScreen('screen-my', this)">
+      <div class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></div>마이페이지
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const classSel = document.getElementById('loginClass');
+  const numSel = document.getElementById('loginNumber');
+  for(let i=1;i<=10;i++){ const o=document.createElement('option'); o.value=i; o.textContent=`${i}반`; classSel.appendChild(o); }
+  for(let i=1;i<=21;i++){ const o=document.createElement('option'); o.value=i; o.textContent=`${i}번`; numSel.appendChild(o); }
+
+  let me = { className:'', number:'', name:'', isAdmin:false };
+  let socket = null;
+  let state = null;
+  let prevMyStatus = null;
+  let prevMyLocked = false;
+
+  function login(isAdmin){
+    const name = document.getElementById('loginName').value.trim();
+    const className = classSel.value;
+    const number = numSel.value;
+
+    if(!isAdmin && !name){
+      document.getElementById('loginError').style.display = 'block';
+      return;
+    }
+    document.getElementById('loginError').style.display = 'none';
+
+    me = { className, number, name: name || '관리자', isAdmin };
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('userLabel').textContent = isAdmin ? '관리자 모드' : `${className}반 ${number}번 · ${name}`;
+    document.getElementById('reserveCard').style.display = isAdmin ? 'none' : 'block';
+    document.getElementById('adminCard').style.display = isAdmin ? 'block' : 'none';
+
+    socket = io();
+    socket.on('state', (s) => { state = s; render(); });
+    socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
+    socket.on('group:joinError', (msg) => showToast(msg));
+
+    loadMeal();
+  }
+
+  async function loadMeal(){
+    try{
+      const res = await fetch('/api/meal');
+      const data = await res.json();
+      const listEl = document.getElementById('mealList');
+      if(!data.menu || data.menu.length === 0){
+        listEl.innerHTML = `<div class="hero-sub">${data.notice || '급식 정보가 없어요'}</div>`;
+        return;
+      }
+      document.getElementById('mealDate').textContent =
+        `${data.date.slice(0,4)}년 ${data.date.slice(4,6)}월 ${data.date.slice(6,8)}일 · 중식`;
+      listEl.innerHTML = data.menu.map(item =>
+        `<div class="menu-item"><span class="menu-icon">🍽️</span><span>${item}</span></div>`
+      ).join('');
+    }catch(e){ console.error(e); }
+  }
+
+  function switchScreen(id, el){
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    document.querySelector('.content-area').scrollTop = 0;
+    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+    el.classList.add('active');
+  }
+  function openModal(id){ document.getElementById(id).classList.add('active'); }
+  function closeModal(id){ document.getElementById(id).classList.remove('active'); }
+  function switchGroupTab(type){
+    document.getElementById('groupCreateBox').style.display = type==='create' ? 'block':'none';
+    document.getElementById('groupJoinBox').style.display = type==='join' ? 'block':'none';
+    document.getElementById('tabCreate').className = 'btn ' + (type==='create' ? 'btn-primary':'btn-outline');
+    document.getElementById('tabJoin').className = 'btn ' + (type==='join' ? 'btn-primary':'btn-outline');
+  }
+
+  let toastTimer;
+  function showToast(msg){
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(()=>t.classList.remove('show'), 2400);
+  }
+
+  function reserveSolo(){
+    socket.emit('reserve:solo', { className: me.className, number: me.number, name: me.name });
+    closeModal('modalSolo');
+  }
+  function createGroup(){
+    const size = document.getElementById('groupSizeInput').value;
+    if(!size){ showToast('인원 수를 입력하세요'); return; }
+    socket.emit('group:create', { className: me.className, number: me.number, name: me.name, size });
+  }
+  function joinGroup(){
+    const code = document.getElementById('groupCodeInput').value.trim().toUpperCase();
+    if(!code){ showToast('코드를 입력하세요'); return; }
+    socket.emit('group:join', { className: me.className, number: me.number, name: me.name, code });
+    closeModal('modalGroup');
+  }
+  function adminStart(){ socket.emit('admin:start'); }
+  function adminReset(){ socket.emit('admin:reset'); }
+  function confirmSeat(){
+    const mine = state.reservations.find(isMine);
+    if(!mine) return;
+    socket.emit('confirmSeat', { reservationId: mine.id });
+  }
+  function releaseSeat(){
+    const mine = state.reservations.find(isMine);
+    if(!mine) return;
+    socket.emit('release', { reservationId: mine.id });
+  }
+  function isMine(r){
+    return r.members.some(m => m.className === me.className && m.number === me.number);
+  }
+
+  function render(){
+    if(!state) return;
+    const mine = state.reservations.find(isMine);
+
+    if(mine){
+      const idx = state.reservations.indexOf(mine);
+      document.getElementById('myQueueNum').textContent = idx + 1;
+      let statusText = '대기중', chipClass = 'chip-orange';
+      if(mine.status === 'assigned'){ statusText = '배정 완료'; chipClass = 'chip-yellow'; }
+      else if(mine.status === 'released'){ statusText = '퇴식 완료'; chipClass = 'chip-yellow'; }
+      else if(mine.priorityLocked){ statusText = '우선 확보 대기'; chipClass = 'chip-danger'; }
+      else if(state.currentTurnIndex === idx){ statusText = '내 차례!'; chipClass = 'chip-danger'; }
+      document.getElementById('statusChip').textContent = statusText;
+      document.getElementById('statusChip').className = 'chip ' + chipClass;
+      document.getElementById('releaseBtn').style.display = mine.status === 'assigned' ? 'block' : 'none';
+    } else {
+      document.getElementById('myQueueNum').textContent = '-';
+      document.getElementById('statusChip').textContent = '예약 전';
+      document.getElementById('statusChip').className = 'chip chip-orange';
+      document.getElementById('releaseBtn').style.display = 'none';
+    }
+
+    document.getElementById('currentServingText').textContent =
+      !state.adminStarted ? '아직 배정 시작 전이에요' :
+      state.currentTurnIndex === -2 ? '대기열이 모두 처리됐어요' :
+      `현재 진행 순번: ${state.currentTurnIndex + 1}번`;
+
+    const groupCard = document.getElementById('groupStatusCard');
+    if(mine && mine.type === 'group'){
+      groupCard.style.display = 'block';
+      document.getElementById('groupInfoText').innerHTML = `코드 <b>${mine.groupCode}</b> · ${mine.members.length}/${mine.size}명 참여`;
+      document.getElementById('groupSkipChip').style.display = mine.priorityLocked ? 'inline-flex' : 'none';
+    } else {
+      groupCard.style.display = 'none';
+    }
+
+    const myTurn = mine && state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting';
+    document.getElementById('turnAlert').classList.toggle('active', !!myTurn);
+
+    if(mine){
+      if(prevMyStatus === 'waiting' && mine.status === 'assigned'){
+        showToast(`착석 인증 완료! ${mine.seatIds.join(', ')} 좌석`);
+      }
+      if(!prevMyLocked && mine.priorityLocked && mine.status === 'waiting'){
+        showToast('자리가 없어 스킵됐어요. 우선 확보 대기중입니다');
+      }
+      prevMyStatus = mine.status;
+      prevMyLocked = mine.priorityLocked;
+    }
+
+    const seatMapEl = document.getElementById('seatMapContainer');
+    seatMapEl.innerHTML = '';
+    const byTable = {};
+    state.seats.forEach(s => (byTable[s.tableId] ||= []).push(s));
+    for(const tableId in byTable){
+      const block = document.createElement('div');
+      block.className = 'table-block';
+      const label = document.createElement('div');
+      label.className = 'table-label';
+      label.textContent = `TABLE ${tableId}`;
+      const grid = document.createElement('div');
+      grid.className = 'seat-grid';
+      byTable[tableId].forEach(s => {
+        const seatDiv = document.createElement('div');
+        const mineSeats = mine ? mine.seatIds : [];
+        seatDiv.className = 'seat' + (s.status === 'occupied' ? (mineSeats.includes(s.id) ? ' mine' : ' full') : '');
+        seatDiv.textContent = s.id;
+        grid.appendChild(seatDiv);
+      });
+      block.appendChild(label);
+      block.appendChild(grid);
+      seatMapEl.appendChild(block);
+    }
+
+    const queueEl = document.getElementById('queueList');
+    queueEl.innerHTML = '';
+    state.reservations.forEach((r, i) => {
+      const div = document.createElement('div');
+      div.className = 'history-item';
+      const label = r.type === 'group'
+        ? `모둠(${r.groupCode}) ${r.members.map(m=>m.name).join(', ')} · ${r.size}인`
+        : `${r.className}반 ${r.number}번 · ${r.name}`;
+      let tagClass = 'wait', tagText = '대기중';
+      if(r.status === 'assigned'){ tagClass='ok'; tagText=`배정 (${r.seatIds.join(',')})`; }
+      else if(r.status === 'released'){ tagClass='ok'; tagText='퇴식 완료'; }
+      else if(r.priorityLocked){ tagClass='skip'; tagText='우선확보 대기'; }
+      else if(i === state.currentTurnIndex){ tagClass='skip'; tagText='진행중'; }
+      div.innerHTML = `<span>${i+1}. ${label}</span><span class="tag ${tagClass}">${tagText}</span>`;
+      queueEl.appendChild(div);
+    });
+
+    document.getElementById('accountText').textContent =
+      me.isAdmin ? '관리자 계정' : `${me.className}반 ${me.number}번 · ${me.name}`;
+  }
+</script>
+</body>
+</html>
