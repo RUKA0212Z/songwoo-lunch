@@ -9,7 +9,7 @@ const io = new Server(server);
 app.use(express.static('public'));
 
 // ===== NEIS 급식 API =====
-const NEIS_KEY = 'e0abd2795b4e49e0aabf24a60a04194c';
+const NEIS_KEY = process.env.NEIS_KEY || 'e0abd2795b4e49e0aabf24a60a04194c';
 const OFFICE_CODE = 'J10';
 const SCHOOL_CODE = '7530806';
 
