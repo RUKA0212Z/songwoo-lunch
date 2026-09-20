@@ -185,19 +185,24 @@
   <!-- ============ 로그인 ============ -->
   <div id="loginScreen">
     <div class="login-card">
-      <h2>급식줄 예약</h2>
-      <div class="desc">반/번호/이름을 입력하고 입장하세요</div>
-      <input type="text" id="loginName" placeholder="이름">
-      <div class="login-row">
-        <select id="loginClass"></select>
-        <select id="loginNumber"></select>
-      </div>
-      <div id="loginError">반/번호/이름을 모두 입력해주세요</div>
-      <div class="login-tabs">
-        <button class="btn btn-primary" onclick="login(false)">학생으로 입장</button>
-        <button class="btn btn-outline" onclick="login(true)">관리자</button>
-      </div>
-    </div>
+  <h2 id="loginTitle" onclick="handleTitleTap()" style="cursor:default;">급식줄 예약</h2>
+  <div class="desc">반/번호/이름을 입력하고 입장하세요</div>
+  <input type="text" id="loginName" placeholder="이름">
+  <div class="login-row">
+    <select id="loginClass"></select>
+    <select id="loginNumber"></select>
+  </div>
+  <div id="loginError">반/번호/이름을 모두 입력해주세요</div>
+  <div class="login-tabs">
+    <button class="btn btn-primary" onclick="login(false)">학생으로 입장</button>
+  </div>
+
+  <!-- 평소엔 숨겨져 있는 관리자 진입창 -->
+  <div id="adminSecretBox" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line);">
+    <input type="text" id="adminPasswordInput" placeholder="관리자 비밀번호">
+    <button class="btn btn-outline" style="margin-top:10px;" onclick="tryAdminLogin()">관리자 인증</button>
+  </div>
+</div>
   </div>
 
   <div class="topbar">
@@ -329,6 +334,47 @@
 </div>
 
 <script>
+// 제목 5번 탭 감지
+let titleTapCount = 0;
+let titleTapTimer = null;
+function handleTitleTap(){
+  titleTapCount++;
+  clearTimeout(titleTapTimer);
+  titleTapTimer = setTimeout(() => { titleTapCount = 0; }, 1500);
+  if(titleTapCount >= 5){
+    titleTapCount = 0;
+    document.getElementById('adminSecretBox').style.display = 'block';
+  }
+}
+
+// 관리자 비밀번호 확인 (서버에 물어봄)
+let adminAuthSocket = null;
+function tryAdminLogin(){
+  const pw = document.getElementById('adminPasswordInput').value;
+  if(!pw){ showToast('비밀번호를 입력하세요'); return; }
+
+  adminAuthSocket = io();
+  adminAuthSocket.emit('admin:login', pw);
+  adminAuthSocket.on('admin:loginResult', ({ success }) => {
+    if(success){
+      me = { className:'', number:'', name:'관리자', isAdmin:true };
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('userLabel').textContent = '관리자 모드';
+      document.getElementById('reserveCard').style.display = 'none';
+      document.getElementById('adminCard').style.display = 'block';
+
+      socket = adminAuthSocket;
+      socket.on('state', (s) => { state = s; render(); });
+      socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
+      socket.on('group:joinError', (msg) => showToast(msg));
+      loadMeal();
+    } else {
+      showToast('비밀번호가 틀렸어요');
+      adminAuthSocket.disconnect();
+    }
+  });
+}
+
   const classSel = document.getElementById('loginClass');
   const numSel = document.getElementById('loginNumber');
   for(let i=1;i<=10;i++){ const o=document.createElement('option'); o.value=i; o.textContent=`${i}반`; classSel.appendChild(o); }

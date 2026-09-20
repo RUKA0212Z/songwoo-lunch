@@ -8,6 +8,9 @@ const io = new Server(server);
 
 app.use(express.static('public'));
 
+const ADMIN_PASSWORD = 'songwoo2026'; // 원하는 비밀번호로 바꾸세요
+
+
 // ===== NEIS 급식 API =====
 const NEIS_KEY = process.env.NEIS_KEY || 'e0abd2795b4e49e0aabf24a60a04194c';
 const OFFICE_CODE = 'J10';
@@ -111,6 +114,17 @@ function broadcastState() {
 }
 
 io.on('connection', (socket) => {
+socket.data.isAdmin = false;
+
+socket.on('admin:login', (password) => {
+  if (password === ADMIN_PASSWORD) {
+    socket.data.isAdmin = true;
+    socket.emit('admin:loginResult', { success: true });
+  } else {
+    socket.emit('admin:loginResult', { success: false });
+  }
+});
+
   broadcastState();
 
   socket.on('reserve:solo', ({ className, number, name }) => {
@@ -152,12 +166,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('admin:start', () => {
-    if (adminStarted) return;
-    adminStarted = true;
-    currentTurnIndex = reservations.findIndex(r => r.status === 'waiting' && !r.priorityLocked);
-    if (currentTurnIndex === -1) currentTurnIndex = -2;
-    broadcastState();
-  });
+  if (!socket.data.isAdmin) return; // 관리자 인증 안 됐으면 무시
+  if (adminStarted) return;
+  adminStarted = true;
+  currentTurnIndex = reservations.findIndex(r => r.status === 'waiting' && !r.priorityLocked);
+  if (currentTurnIndex === -1) currentTurnIndex = -2;
+  broadcastState();
+});
 
   socket.on('confirmSeat', ({ reservationId }) => {
     if (currentTurnIndex < 0) return;
@@ -187,6 +202,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('admin:reset', () => {
+    if (!socket.data.isAdmin) return; // 관리자 인증 안 됐으면 무시
     reservations = [];
     resetSeats();
     currentTurnIndex = -1;
