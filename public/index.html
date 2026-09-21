@@ -57,7 +57,7 @@
   .login-card h2{font-size:19px; font-weight:800; color:var(--ink); margin-bottom:4px;}
   .login-card .desc{font-size:13px; color:var(--sub); margin-bottom:18px;}
   .login-row{display:flex; gap:8px; margin-bottom:10px;}
-  select, input[type=text]{
+  select, input[type=text], input[type=password]{
     width:100%; padding:13px; border-radius:12px; border:1.5px solid var(--line);
     font-size:14.5px; outline:none; background:#fffaf6; color:var(--ink); margin-top:8px;
   }
@@ -179,7 +179,6 @@
   .modal h3{font-size:17px; margin-bottom:16px; font-weight:800; color:var(--ink);}
   #scanVideo{width:220px; height:220px; border-radius:20px; object-fit:cover; border:3px solid #fff; margin:16px 0; background:#000;}
   #scanStatus{font-size:13px; color:#ffd9d3; margin-bottom:14px; min-height:18px;}
-
 </style>
 </head>
 <body>
@@ -201,7 +200,7 @@
       </div>
 
       <div id="adminSecretBox" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line);">
-        <input type="text" id="adminPasswordInput" placeholder="관리자 비밀번호">
+        <input type="password" id="adminPasswordInput" placeholder="관리자 비밀번호">
         <button class="btn btn-outline" style="margin-top:10px;" onclick="tryAdminLogin()">관리자 인증</button>
       </div>
     </div>
@@ -283,11 +282,11 @@
 
   <!-- ============ 차례 알림 ============ -->
   <div id="turnAlert">
-    <div class="label">내 차례입니다</div>
-    <div class="seatnum">착석 인증을 진행하세요</div>
-    <video id="scanVideo" autoplay playsinline muted></video>
-    <div id="scanStatus">카메라 준비 중...</div>
-    <button class="btn btn-outline" style="width:200px; border-color:rgba(255,255,255,.3); color:#fff; background:transparent;" onclick="confirmSeatNow()">착석 인증 완료 (임시)</button>
+  <div class="label">내 차례입니다</div>
+  <div class="seatnum">카메라로 QR을 인식합니다</div>
+  <video id="scanVideo" autoplay playsinline muted></video>
+  <div id="scanStatus">카메라 준비 중...</div>
+  <button class="btn btn-outline" style="width:200px; border-color:rgba(255,255,255,.3); color:#fff; background:transparent;" onclick="confirmSeatNow()">착석 인증 완료 (임시)</button>
   </div>
 
   <!-- ============ 모달: 개인예약 ============ -->
@@ -477,9 +476,9 @@
   function adminOpenReservations(){ socket.emit('admin:openReservations'); }
   function adminStart(){ socket.emit('admin:start'); }
   function adminReset(){ socket.emit('admin:reset'); }
-//카메라 관련 함수
-let scanStream = null;
-let scanning = false;
+  
+  let scanStream = null;
+  let scanning = false;
 
 function startScan(){
   if(scanning) return;
@@ -493,9 +492,8 @@ function startScan(){
       video.srcObject = stream;
       statusEl.textContent = 'QR을 화면 안에 맞춰주세요';
     })
-    .catch((err) => {
+    .catch(() => {
       statusEl.textContent = '카메라 권한을 허용해주세요';
-      console.error('카메라 에러:', err);
     });
 }
 
@@ -513,7 +511,7 @@ function confirmSeatNow(){
   stopScan();
   socket.emit('confirmSeat', { reservationId: mine.id });
 }
-//카메라함수 관련 까지
+
   function releaseSeat(){
     const mine = state.reservations.find(isMine);
     if(!mine) return;
@@ -567,10 +565,10 @@ function confirmSeatNow(){
     }
 
     const myTurn = mine && state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting';
-    document.getElementById('turnAlert').classList.toggle('active', !!myTurn);
-    if(myTurn && !scanning) startScan();
-    if(!myTurn && scanning) stopScan();
-
+document.getElementById('turnAlert').classList.toggle('active', !!myTurn);
+if(myTurn && !scanning) startScan();
+if(!myTurn && scanning) stopScan();
+    
     if(mine){
       if(prevMyStatus === 'waiting' && mine.status === 'assigned'){
         showToast(`착석 인증 완료! ${mine.seatIds.join(', ')} 좌석`);

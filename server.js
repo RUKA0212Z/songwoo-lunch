@@ -17,8 +17,8 @@ const OFFICE_CODE = 'J10';
 const SCHOOL_CODE = '7530806';
 
 app.get('/api/meal', async (req, res) => {
-  const today = new Date();
-  const ymd = today.toISOString().slice(0, 10).replace(/-/g, '');
+  const kstNow = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const ymd = kstNow.toISOString().slice(0, 10).replace(/-/g, '');
   const url = `https://open.neis.go.kr/hub/mealServiceDietInfo?KEY=${NEIS_KEY}&Type=json&ATPT_OFCDC_SC_CODE=${OFFICE_CODE}&SD_SCHUL_CODE=${SCHOOL_CODE}&MLSV_YMD=${ymd}`;
 
   try {
