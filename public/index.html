@@ -564,8 +564,10 @@ function confirmSeatNow(){
     }
 
     const myTurn = mine && state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting';
-    document.getElementById('turnAlert').classList.toggle('active', !!myTurn);
-
+document.getElementById('turnAlert').classList.toggle('active', !!myTurn);
+if(myTurn && !scanning) startScan();
+if(!myTurn && scanning) stopScan();
+    
     if(mine){
       if(prevMyStatus === 'waiting' && mine.status === 'assigned'){
         showToast(`착석 인증 완료! ${mine.seatIds.join(', ')} 좌석`);
