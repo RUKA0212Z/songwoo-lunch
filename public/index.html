@@ -384,7 +384,10 @@
         socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
         socket.on('group:joinError', (msg) => showToast(msg));
         socket.on('reserve:error', (msg) => showToast(msg));
-        socket.on('confirmSeat:error', (msg) => { showToast(msg); startScan(); });   // ← 이 줄 추가
+        socket.on('confirmSeat:error', (msg) => {
+          showToast(msg);
+          awaitingConfirm = false;
+        });
         loadMeal();
       } else {
         showToast('비밀번호가 틀렸어요');
@@ -416,7 +419,10 @@
     socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
     socket.on('group:joinError', (msg) => showToast(msg));
     socket.on('reserve:error', (msg) => showToast(msg));
-    socket.on('confirmSeat:error', (msg) => { showToast(msg); startScan(); });   // ← 이 줄 추가
+    socket.on('confirmSeat:error', (msg) => {
+      showToast(msg);
+      awaitingConfirm = false;
+    });
 
     loadMeal();
   }
@@ -489,11 +495,13 @@
 let scanStream = null;
 let scanRAF = null;
 let scanning = false;
+let awaitingConfirm = false;
 let scanErrorTimer = null;
 
 function startScan(){
   if(scanning) return;
   scanning = true;
+  awaitingConfirm = false;
   const video = document.getElementById('scanVideo');
   const statusEl = document.getElementById('scanStatus');
 
@@ -501,7 +509,7 @@ function startScan(){
     .then(stream => {
       scanStream = stream;
       video.srcObject = stream;
-      video.play().catch(err => console.error('video play 실패:', err));  // 이 줄 추가
+      video.play().catch(err => console.error('video play 실패:', err));
       statusEl.textContent = 'QR을 화면 안에 맞춰주세요';
       requestAnimationFrame(scanLoop);
     })
@@ -516,7 +524,8 @@ function scanLoop(){
   const canvas = document.getElementById('scanCanvas');
   const statusEl = document.getElementById('scanStatus');
 
-  if(video.readyState === video.HAVE_ENOUGH_DATA){
+  // 서버 응답 기다리는 중엔 새 QR 인식은 건너뛰되, 카메라는 계속 켜둠 (검은화면 방지)
+  if(!awaitingConfirm && video.readyState === video.HAVE_ENOUGH_DATA){
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext('2d');
@@ -525,18 +534,12 @@ function scanLoop(){
     const code = jsQR(imageData.data, imageData.width, imageData.height);
 
     if(code){
-      const seatId = code.data.trim().replace('SEAT-', '');
+      const seatId = code.data.trim().toUpperCase().replace('SEAT-', '');
+      awaitingConfirm = true;
       statusEl.textContent = '확인 중...';
-      stopScan();
       confirmSeatNow(seatId);
-      return;
     } else {
-      statusEl.textContent = '잘못된 QR입니다';
-      statusEl.style.color = '#ffb3b3';
-      clearTimeout(scanErrorTimer);
-      scanErrorTimer = setTimeout(() => {
-        if(scanning){ statusEl.textContent = 'QR을 화면 안에 맞춰주세요'; statusEl.style.color = ''; }
-      }, 1500);
+      statusEl.textContent = 'QR을 화면 안에 맞춰주세요';
     }
   }
   scanRAF = requestAnimationFrame(scanLoop);
@@ -544,6 +547,7 @@ function scanLoop(){
 
 function stopScan(){
   scanning = false;
+  awaitingConfirm = false;
   if(scanRAF) cancelAnimationFrame(scanRAF);
   if(scanStream){
     scanStream.getTracks().forEach(t => t.stop());
@@ -553,8 +557,17 @@ function stopScan(){
 
 function confirmSeatNow(seatId){
   const mine = state.reservations.find(isMine);
-  if(!mine) return;
+  if(!mine){
+    showToast('예약 정보를 찾을 수 없어요');
+    awaitingConfirm = false;
+    return;
+  }
   const finalSeatId = seatId || (mine.pendingSeatIds && mine.pendingSeatIds[0]);
+  if(!finalSeatId){
+    showToast('아직 좌석이 배정되지 않았어요. 잠시 후 다시 시도해주세요');
+    awaitingConfirm = false;
+    return;
+  }
   socket.emit('confirmSeat', { reservationId: mine.id, seatId: finalSeatId });
 }
 
