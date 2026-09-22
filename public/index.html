@@ -384,6 +384,7 @@
         socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
         socket.on('group:joinError', (msg) => showToast(msg));
         socket.on('reserve:error', (msg) => showToast(msg));
+        socket.on('confirmSeat:error', (msg) => { showToast(msg); startScan(); });   // ← 이 줄 추가
         loadMeal();
       } else {
         showToast('비밀번호가 틀렸어요');
@@ -415,6 +416,7 @@
     socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
     socket.on('group:joinError', (msg) => showToast(msg));
     socket.on('reserve:error', (msg) => showToast(msg));
+    socket.on('confirmSeat:error', (msg) => { showToast(msg); startScan(); });   // ← 이 줄 추가
 
     loadMeal();
   }
@@ -522,11 +524,11 @@ function scanLoop(){
     const code = jsQR(imageData.data, imageData.width, imageData.height);
 
     if(code){
-      if(VALID_SEAT_CODES.includes(code.data)){
-        statusEl.textContent = `인증 성공! (${code.data})`;
-        stopScan();
-        confirmSeatNow();
-        return;
+      const seatId = code.data.trim().replace('SEAT-', '');
+      statusEl.textContent = '확인 중...';
+      stopScan();
+      confirmSeatNow(seatId);
+      return;
       } else {
         statusEl.textContent = '잘못된 QR입니다';
         statusEl.style.color = '#ffb3b3';
@@ -538,7 +540,7 @@ function scanLoop(){
     }
   }
   scanRAF = requestAnimationFrame(scanLoop);
-}
+
 
 function stopScan(){
   scanning = false;
@@ -549,10 +551,11 @@ function stopScan(){
   }
 }
 
-function confirmSeatNow(){
+function confirmSeatNow(seatId){
   const mine = state.reservations.find(isMine);
   if(!mine) return;
-  socket.emit('confirmSeat', { reservationId: mine.id });
+  const finalSeatId = seatId || (mine.pendingSeatIds && mine.pendingSeatIds[0]);
+  socket.emit('confirmSeat', { reservationId: mine.id, seatId: finalSeatId });
 }
 
   function releaseSeat(){

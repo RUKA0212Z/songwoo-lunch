@@ -69,22 +69,27 @@ function findAvailableSeats(size) {
   return null;
 }
 
-function commitAssignment(res, chosenSeats) {
+function reserveSeatsTemporarily(res, chosenSeats) {
+  res.pendingSeatIds = chosenSeats.map(s => s.id);
   for (const s of chosenSeats) {
     s.status = 'occupied';
     s.occupiedBy = res.id;
   }
+}
+
+function finalizeAssignment(res) {
   res.status = 'assigned';
-  res.seatIds = chosenSeats.map(s => s.id);
+  res.seatIds = res.pendingSeatIds;
+  res.pendingSeatIds = [];
 }
 
 function checkPriorityLocked() {
   for (const res of reservations) {
     if (res.status !== 'waiting' || !res.priorityLocked) continue;
+    if (res.pendingSeatIds && res.pendingSeatIds.length) continue;
     const chosen = findAvailableSeats(res.size);
     if (chosen) {
-      commitAssignment(res, chosen);
-      checkPriorityLocked();
+      reserveSeatsTemporarily(res, chosen);
       return;
     }
   }
@@ -107,7 +112,7 @@ function broadcastState() {
       id: r.id, className: r.className, number: r.number, name: r.name, type: r.type,
       size: r.size, groupCode: r.groupCode, members: r.members,
       skipCount: r.skipCount, priorityLocked: r.priorityLocked,
-      status: r.status, seatIds: r.seatIds,
+      status: r.status, seatIds: r.seatIds, pendingSeatIds: r.pendingSeatIds,
     })),
     currentTurnIndex,
     adminStarted,
@@ -135,7 +140,7 @@ socket.on('admin:login', (password) => {
       id: `r${Date.now()}${Math.floor(Math.random() * 1000)}`,
       className, number, name, type: 'solo', size: 1,
       members: [{ className, number, name }],
-      skipCount: 0, priorityLocked: false, status: 'waiting', seatIds: [],
+      skipCount: 0, priorityLocked: false, status: 'waiting', seatIds: [], pendingSeatIds: [],
     });
     if (adminStarted && currentTurnIndex === -2) {
       currentTurnIndex = reservations.length - 1;
@@ -150,7 +155,7 @@ socket.on('admin:login', (password) => {
       id: `r${Date.now()}${Math.floor(Math.random() * 1000)}`,
       className, number, name, type: 'group', size: Number(size), groupCode: code,
       members: [{ className, number, name }],
-      skipCount: 0, priorityLocked: false, status: 'waiting', seatIds: [],
+      skipCount: 0, priorityLocked: false, status: 'waiting', seatIds: [], pendingSeatIds: [],
     });
     socket.emit('group:created', { code });
     if (adminStarted && currentTurnIndex === -2) {
@@ -181,24 +186,41 @@ socket.on('admin:login', (password) => {
   adminStarted = true;
   currentTurnIndex = reservations.findIndex(r => r.status === 'waiting' && !r.priorityLocked);
   if (currentTurnIndex === -1) currentTurnIndex = -2;
+  tryAssignTurn();  // 이 줄 추가
   broadcastState();
 });
 
-  socket.on('confirmSeat', ({ reservationId }) => {
-    if (currentTurnIndex < 0) return;
-    const res = reservations[currentTurnIndex];
-    if (!res || res.id !== reservationId) return;
+  function tryAssignTurn() {
+  if (currentTurnIndex < 0) return;
+  const res = reservations[currentTurnIndex];
+  if (!res) return;
 
-    const chosen = findAvailableSeats(res.size);
-    if (chosen) {
-      commitAssignment(res, chosen);
-    } else {
-      res.skipCount += 1;
-      if (res.skipCount >= SKIP_CAP) res.priorityLocked = true;
-    }
+  const chosen = findAvailableSeats(res.size);
+  if (chosen) {
+    reserveSeatsTemporarily(res, chosen);
+  } else {
+    res.skipCount += 1;
+    if (res.skipCount >= SKIP_CAP) res.priorityLocked = true;
     advanceToNextEligible();
-    broadcastState();
-  });
+    tryAssignTurn();
+  }
+}
+
+  socket.on('confirmSeat', ({ reservationId, seatId }) => {
+  if (currentTurnIndex < 0) return;
+  const res = reservations[currentTurnIndex];
+  if (!res || res.id !== reservationId) return;
+
+  if (!res.pendingSeatIds.includes(seatId)) {
+    socket.emit('confirmSeat:error', '배정된 좌석이 아니에요');
+    return;
+  }
+
+  finalizeAssignment(res);
+  advanceToNextEligible();
+  tryAssignTurn();
+  broadcastState();
+});
 
   socket.on('release', ({ reservationId }) => {
     const res = reservations.find(r => r.id === reservationId);
