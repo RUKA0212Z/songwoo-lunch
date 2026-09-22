@@ -28,6 +28,7 @@
     --seat-empty:#aeb1b3b3;
     --seat-full:#f03535e7;
     --seat-mine:#70ef59;
+    --seat-pending:#f0b429;
     --radius-lg:22px;
     --radius-md:16px;
   }
@@ -132,6 +133,7 @@
   .seat-grid{display:grid; grid-template-columns:repeat(6,1fr); gap:7px;}
   .seat{aspect-ratio:1; border-radius:9px; background:var(--seat-empty); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#d9a692;}
   .seat.full{background:var(--seat-full); color:#fff;}
+  .seat.pending{background:var(--seat-pending); color:#fff;}
   .seat.mine{background:var(--seat-mine); color:#fff; box-shadow:0 0 0 2.5px #fff, 0 0 0 5px var(--seat-mine);}
 
   /* 차례 알림 */
@@ -263,6 +265,7 @@
         <span><i class="dot" style="background:var(--seat-empty);"></i>빈자리</span>
         <span><i class="dot" style="background:var(--seat-full);"></i>착석중</span>
         <span><i class="dot" style="background:var(--seat-mine);"></i>내 자리</span>
+        <span><i class="dot" style="background:var(--seat-pending);"></i>인증 대기중</span>
       </div>
       <div id="seatMapContainer"></div>
     </div>
@@ -562,13 +565,16 @@ function confirmSeatNow(seatId){
     awaitingConfirm = false;
     return;
   }
-  const finalSeatId = seatId || (mine.pendingSeatIds && mine.pendingSeatIds[0]);
+  const finalSeatId = seatId || (mine.pendingSeatIds || []).find(id => !(mine.confirmedSeatIds || []).includes(id));
   if(!finalSeatId){
     showToast('아직 좌석이 배정되지 않았어요. 잠시 후 다시 시도해주세요');
     awaitingConfirm = false;
     return;
   }
-  socket.emit('confirmSeat', { reservationId: mine.id, seatId: finalSeatId });
+  socket.emit('confirmSeat', {
+    reservationId: mine.id, seatId: finalSeatId,
+    className: me.className, number: me.number, name: me.name
+  });
 }
 
   function releaseSeat(){
@@ -578,6 +584,10 @@ function confirmSeatNow(seatId){
   }
   function isMine(r){
     return r.members.some(m => m.className === me.className && m.number === me.number);
+  }
+  function hasIConfirmed(r){
+    if(!r || !r.seatConfirmedBy) return false;
+    return Object.values(r.seatConfirmedBy).some(m => m.className === me.className && m.number === me.number);
   }
 
   function render(){
@@ -617,13 +627,17 @@ function confirmSeatNow(seatId){
     const groupCard = document.getElementById('groupStatusCard');
     if(mine && mine.type === 'group'){
       groupCard.style.display = 'block';
-      document.getElementById('groupInfoText').innerHTML = `코드 <b>${mine.groupCode}</b> · ${mine.members.length}/${mine.size}명 참여`;
+      const confirmedCount = (mine.confirmedSeatIds || []).length;
+      const inProgress = state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting';
+      document.getElementById('groupInfoText').innerHTML =
+        `코드 <b>${mine.groupCode}</b> · ${mine.members.length}/${mine.size}명 참여` +
+        (inProgress ? `<br>착석 인증 ${confirmedCount}/${mine.size}명 완료` : '');
       document.getElementById('groupSkipChip').style.display = mine.priorityLocked ? 'inline-flex' : 'none';
     } else {
-      groupCard.style.display = 'none';
+          groupCard.style.display = 'none';
     }
 
-    const myTurn = mine && state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting';
+    const myTurn = mine && state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting' && !hasIConfirmed(mine);
 document.getElementById('turnAlert').classList.toggle('active', !!myTurn);
 if(myTurn && !scanning) startScan();
 if(!myTurn && scanning) stopScan();
@@ -654,7 +668,10 @@ if(!myTurn && scanning) stopScan();
       byTable[tableId].forEach(s => {
         const seatDiv = document.createElement('div');
         const mineSeats = mine ? mine.seatIds : [];
-        seatDiv.className = 'seat' + (s.status === 'occupied' ? (mineSeats.includes(s.id) ? ' mine' : ' full') : '');
+        let cls = 'seat';
+        if(s.status === 'occupied') cls += mineSeats.includes(s.id) ? ' mine' : ' full';
+        else if(s.status === 'pending') cls += ' pending';
+        seatDiv.className = cls;
         seatDiv.textContent = s.id;
         grid.appendChild(seatDiv);
       });

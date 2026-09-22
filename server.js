@@ -71,8 +71,10 @@ function findAvailableSeats(size) {
 
 function reserveSeatsTemporarily(res, chosenSeats) {
   res.pendingSeatIds = chosenSeats.map(s => s.id);
+  res.confirmedSeatIds = [];
+  res.seatConfirmedBy = {};
   for (const s of chosenSeats) {
-    s.status = 'occupied';
+    s.status = 'pending';
     s.occupiedBy = res.id;
   }
 }
@@ -112,7 +114,7 @@ function broadcastState() {
       id: r.id, className: r.className, number: r.number, name: r.name, type: r.type,
       size: r.size, groupCode: r.groupCode, members: r.members,
       skipCount: r.skipCount, priorityLocked: r.priorityLocked,
-      status: r.status, seatIds: r.seatIds, pendingSeatIds: r.pendingSeatIds,
+      status: r.status, seatIds: r.seatIds, pendingSeatIds: r.pendingSeatIds, confirmedSeatIds: r.confirmedSeatIds,
     })),
     currentTurnIndex,
     adminStarted,
@@ -140,7 +142,7 @@ socket.on('admin:login', (password) => {
       id: `r${Date.now()}${Math.floor(Math.random() * 1000)}`,
       className, number, name, type: 'solo', size: 1,
       members: [{ className, number, name }],
-      skipCount: 0, priorityLocked: false, status: 'waiting', seatIds: [], pendingSeatIds: [],
+      skipCount: 0, priorityLocked: false, status: 'waiting', seatIds: [], pendingSeatIds: [], confirmedSeatIds: [], seatConfirmedBy: {},
     });
     if (adminStarted && currentTurnIndex === -2) {
       currentTurnIndex = reservations.length - 1;
@@ -156,7 +158,7 @@ socket.on('admin:login', (password) => {
       id: `r${Date.now()}${Math.floor(Math.random() * 1000)}`,
       className, number, name, type: 'group', size: Number(size), groupCode: code,
       members: [{ className, number, name }],
-      skipCount: 0, priorityLocked: false, status: 'waiting', seatIds: [], pendingSeatIds: [],
+      skipCount: 0, priorityLocked: false, status: 'waiting', seatIds: [], pendingSeatIds: [], confirmedSeatIds: [], seatConfirmedBy: {},
     });
     socket.emit('group:created', { code });
     if (adminStarted && currentTurnIndex === -2) {
@@ -208,7 +210,7 @@ socket.on('admin:login', (password) => {
   }
 }
 
-  socket.on('confirmSeat', ({ reservationId, seatId }) => {
+  socket.on('confirmSeat', ({ reservationId, seatId, className, number, name }) => {
   if (currentTurnIndex < 0) return;
   const res = reservations[currentTurnIndex];
   if (!res || res.id !== reservationId) return;
@@ -217,10 +219,28 @@ socket.on('admin:login', (password) => {
     socket.emit('confirmSeat:error', '배정된 좌석이 아니에요');
     return;
   }
+  if (res.confirmedSeatIds.includes(seatId)) {
+    socket.emit('confirmSeat:error', '이미 확인된 좌석이에요');
+    return;
+  }
+  const alreadyDone = Object.values(res.seatConfirmedBy).some(
+    m => m.className === className && m.number === number
+  );
+  if (alreadyDone) {
+    socket.emit('confirmSeat:error', '이미 착석 인증을 완료했어요');
+    return;
+  }
 
-  finalizeAssignment(res);
-  advanceToNextEligible();
-  tryAssignTurn();
+  res.confirmedSeatIds.push(seatId);
+  res.seatConfirmedBy[seatId] = { className, number, name };
+  const seat = seats.find(s => s.id === seatId);
+  if (seat) seat.status = 'occupied';
+
+  if (res.confirmedSeatIds.length >= res.size) {
+    finalizeAssignment(res);
+    advanceToNextEligible();
+    tryAssignTurn();
+  }
   broadcastState();
 });
 
