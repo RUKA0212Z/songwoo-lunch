@@ -235,6 +235,7 @@ socket.on('admin:login', (password) => {
   res.seatConfirmedBy[seatId] = { className, number, name };
   const seat = seats.find(s => s.id === seatId);
   if (seat) seat.status = 'occupied';
+  socket.emit('confirmSeat:success');
 
   if (res.confirmedSeatIds.length >= res.size) {
     finalizeAssignment(res);

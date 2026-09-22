@@ -392,6 +392,12 @@
           showToast(msg);
           awaitingConfirm = false;
         });
+        socket.on('confirmSeat:success', () => {
+          awaitingConfirm = false;
+          stopScan();
+          document.getElementById('turnAlert').classList.remove('active');
+          showToast('착석 인증 완료!');
+        });
         loadMeal();
       } else {
         showToast('비밀번호가 틀렸어요');
@@ -427,7 +433,12 @@
       showToast(msg);
       awaitingConfirm = false;
     });
-
+    socket.on('confirmSeat:success', () => {
+      awaitingConfirm = false;
+      stopScan();
+      document.getElementById('turnAlert').classList.remove('active');
+      showToast('착석 인증 완료!');
+    });
     loadMeal();
   }
 
