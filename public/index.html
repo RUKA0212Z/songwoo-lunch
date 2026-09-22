@@ -666,19 +666,24 @@ if(!myTurn && scanning) stopScan();
     const queueEl = document.getElementById('queueList');
     queueEl.innerHTML = '';
     state.reservations.forEach((r, i) => {
-      const div = document.createElement('div');
-      div.className = 'history-item';
-      const label = r.type === 'group'
-        ? `모둠(${r.groupCode}) ${r.members.map(m=>m.name).join(', ')} · ${r.size}인`
-        : `${r.className}반 ${r.number}번 · ${r.name}`;
-      let tagClass = 'wait', tagText = '대기중';
-      if(r.status === 'assigned'){ tagClass='ok'; tagText=`배정 (${r.seatIds.join(',')})`; }
-      else if(r.status === 'released'){ tagClass='ok'; tagText='퇴식 완료'; }
-      else if(r.priorityLocked){ tagClass='skip'; tagText='우선확보 대기'; }
-      else if(i === state.currentTurnIndex){ tagClass='skip'; tagText='진행중'; }
-      div.innerHTML = `<span>${i+1}. ${label}</span><span class="tag ${tagClass}">${tagText}</span>`;
-      queueEl.appendChild(div);
-    });
+  const div = document.createElement('div');
+  div.className = 'history-item';
+  const label = r.type === 'group'
+    ? `모둠(${r.groupCode}) ${r.members.map(m=>m.name).join(', ')} · ${r.size}인`
+    : `${r.className}반 ${r.number}번 · ${r.name}`;
+  let tagClass = 'wait', tagText = '대기중';
+  if(r.status === 'assigned'){ tagClass='ok'; tagText=`배정 (${r.seatIds.join(',')})`; }
+  else if(r.status === 'released'){ tagClass='ok'; tagText='퇴식 완료'; }
+  else if(r.priorityLocked){ tagClass='skip'; tagText='우선확보 대기'; }
+  else if(i === state.currentTurnIndex){
+    tagClass='skip';
+    tagText = r.pendingSeatIds && r.pendingSeatIds.length
+      ? `대기중 QR: ${r.pendingSeatIds.join(',')}`
+      : '진행중 (좌석 미확정)';
+  }
+  div.innerHTML = `<span>${i+1}. ${label}</span><span class="tag ${tagClass}">${tagText}</span>`;
+  queueEl.appendChild(div);
+});
 
     document.getElementById('accountText').textContent =
       me.isAdmin ? '관리자 계정' : `${me.className}반 ${me.number}번 · ${me.name}`;
