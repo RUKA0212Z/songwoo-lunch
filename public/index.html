@@ -354,6 +354,7 @@
   let state = null;
   let prevMyStatus = null;
   let prevMyLocked = false;
+  let prevIConfirmed = false;
 
   // ---------- 관리자 숨김 진입 ----------
   let titleTapCount = 0;
@@ -643,14 +644,21 @@ if(myTurn && !scanning) startScan();
 if(!myTurn && scanning) stopScan();
     
     if(mine){
-      if(prevMyStatus === 'waiting' && mine.status === 'assigned'){
-        showToast(`착석 인증 완료! ${mine.seatIds.join(', ')} 좌석`);
+      const iConfirmedNow = hasIConfirmed(mine);
+      if(!prevIConfirmed && iConfirmedNow){
+        showToast('착석 인증 완료!');
+      }
+      if(prevMyStatus === 'waiting' && mine.status === 'assigned' && !iConfirmedNow){
+        // (개인 인증 토스트를 이미 위에서 띄웠으므로, 그룹 전체 완료 시점엔 중복 안내 생략)
       }
       if(!prevMyLocked && mine.priorityLocked && mine.status === 'waiting'){
         showToast('자리가 없어 스킵됐어요. 우선 확보 대기중입니다');
       }
       prevMyStatus = mine.status;
       prevMyLocked = mine.priorityLocked;
+      prevIConfirmed = iConfirmedNow;
+    } else {
+      prevIConfirmed = false;
     }
 
     const seatMapEl = document.getElementById('seatMapContainer');
