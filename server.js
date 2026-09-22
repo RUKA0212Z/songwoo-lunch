@@ -144,6 +144,7 @@ socket.on('admin:login', (password) => {
     });
     if (adminStarted && currentTurnIndex === -2) {
       currentTurnIndex = reservations.length - 1;
+      tryAssignTurn();
     }
     broadcastState();
   });
@@ -160,6 +161,7 @@ socket.on('admin:login', (password) => {
     socket.emit('group:created', { code });
     if (adminStarted && currentTurnIndex === -2) {
       currentTurnIndex = reservations.length - 1;
+      tryAssignTurn();
     }
     broadcastState();
   });
