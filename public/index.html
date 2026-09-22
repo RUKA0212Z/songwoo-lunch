@@ -530,18 +530,17 @@ function scanLoop(){
       stopScan();
       confirmSeatNow(seatId);
       return;
-      } else {
-        statusEl.textContent = '잘못된 QR입니다';
-        statusEl.style.color = '#ffb3b3';
-        clearTimeout(scanErrorTimer);
-        scanErrorTimer = setTimeout(() => {
-          if(scanning){ statusEl.textContent = 'QR을 화면 안에 맞춰주세요'; statusEl.style.color = ''; }
-        }, 1500);
-      }
+    } else {
+      statusEl.textContent = '잘못된 QR입니다';
+      statusEl.style.color = '#ffb3b3';
+      clearTimeout(scanErrorTimer);
+      scanErrorTimer = setTimeout(() => {
+        if(scanning){ statusEl.textContent = 'QR을 화면 안에 맞춰주세요'; statusEl.style.color = ''; }
+      }, 1500);
     }
   }
   scanRAF = requestAnimationFrame(scanLoop);
-
+}
 
 function stopScan(){
   scanning = false;
