@@ -501,6 +501,7 @@ function startScan(){
     .then(stream => {
       scanStream = stream;
       video.srcObject = stream;
+      video.play().catch(err => console.error('video play 실패:', err));  // 이 줄 추가
       statusEl.textContent = 'QR을 화면 안에 맞춰주세요';
       requestAnimationFrame(scanLoop);
     })
