@@ -43,6 +43,8 @@ let reservations = []; // { id, className, number, name, type, size, groupCode, 
 let currentTurnIndex = -1;
 let adminStarted = false;
 let reservationsOpen = false;
+const MAX_GROUP_SIZE = 6; // 모둠 최대 인원, 필요하면 숫자만 바꾸면 됨
+let pendingGroups = []; // 아직 대기열에 안 들어간, 모여있기만 한 모둠들
 
 function makeSeats(tableId, count) {
   return Array.from({ length: count }, (_, i) => ({
@@ -117,6 +119,7 @@ function broadcastState() {
       status: r.status, seatIds: r.seatIds, pendingSeatIds: r.pendingSeatIds,
       confirmedSeatIds: r.confirmedSeatIds, seatConfirmedBy: r.seatConfirmedBy,
     })),
+    pendingGroups,
     currentTurnIndex,
     adminStarted,
     reservationsOpen,   // 이 줄 추가
@@ -152,15 +155,15 @@ socket.on('admin:login', (password) => {
     broadcastState();
   });
 
-  socket.on('group:create', ({ className, number, name, size }) => {
-    if (!reservationsOpen) { socket.emit('reserve:error', '아직 예약을 받지 않아요'); return; }
-    const code = Math.random().toString(36).slice(2, 6).toUpperCase();
-    reservations.push({
-      id: `r${Date.now()}${Math.floor(Math.random() * 1000)}`,
-      className, number, name, type: 'group', size: Number(size), groupCode: code,
-      members: [{ className, number, name }],
-      skipCount: 0, priorityLocked: false, status: 'waiting', seatIds: [], pendingSeatIds: [], confirmedSeatIds: [], seatConfirmedBy: {},
-    });
+  socket.on('group:create', ({ className, number, name }) => {
+  const code = Math.random().toString(36).slice(2, 6).toUpperCase();
+  pendingGroups.push({
+    code,
+    members: [{ className, number, name }],
+  });
+  socket.emit('group:created', { code });
+  broadcastState();
+});
     socket.emit('group:created', { code });
     if (adminStarted && currentTurnIndex === -2) {
       currentTurnIndex = reservations.length - 1;
@@ -169,15 +172,54 @@ socket.on('admin:login', (password) => {
     broadcastState();
   });
 
-  socket.on('group:join', ({ className, number, name, code }) => {
-    const target = reservations.find(r => r.groupCode === code);
-    if (!target) {
+    socket.on('group:join', ({ className, number, name, code }) => {
+    const group = pendingGroups.find(g => g.code === code);
+    if (!group) {
       socket.emit('group:joinError', '코드를 찾을 수 없어요');
       return;
     }
-    target.members.push({ className, number, name });
+    if (group.members.length >= MAX_GROUP_SIZE) {
+      socket.emit('group:joinError', `모둠 최대 인원(${MAX_GROUP_SIZE}명)을 초과했어요`);
+      return;
+    }
+    const already = group.members.some(m => m.className === className && m.number === number);
+    if (already) {
+      socket.emit('group:joinError', '이미 참여한 모둠이에요');
+      return;
+    }
+    group.members.push({ className, number, name });
     broadcastState();
   });
+  socket.on('group:submit', ({ code, className, number }) => {
+  if (!reservationsOpen) {
+    socket.emit('group:submitError', '아직 예약을 받지 않아요');
+    return;
+  }
+  const idx = pendingGroups.findIndex(g => g.code === code);
+  if (idx === -1) {
+    socket.emit('group:submitError', '모둠 정보를 찾을 수 없어요');
+    return;
+  }
+  const group = pendingGroups[idx];
+  const isMember = group.members.some(m => m.className === className && m.number === number);
+  if (!isMember) return;
+
+  pendingGroups.splice(idx, 1);
+
+  reservations.push({
+    id: `r${Date.now()}${Math.floor(Math.random() * 1000)}`,
+    className: group.members[0].className, number: group.members[0].number, name: group.members[0].name,
+    type: 'group', size: group.members.length, groupCode: group.code,
+    members: group.members,
+    skipCount: 0, priorityLocked: false, status: 'waiting', seatIds: [], pendingSeatIds: [], confirmedSeatIds: [], seatConfirmedBy: {},
+  });
+
+  if (adminStarted && currentTurnIndex === -2) {
+    currentTurnIndex = reservations.length - 1;
+    tryAssignTurn();
+  }
+  broadcastState();
+});
 
   socket.on('admin:openReservations', () => {
     if (!socket.data.isAdmin) return;
@@ -287,13 +329,14 @@ socket.on('admin:login', (password) => {
   socket.on('admin:reset', () => {
     if (!socket.data.isAdmin) return; // 관리자 인증 안 됐으면 무시
     reservations = [];
+    pendingGroups = [];
     resetSeats();
     currentTurnIndex = -1;
     adminStarted = false;
     reservationsOpen = false;   // 이 줄 추가
     broadcastState();
   });
-});
+
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`서버 실행중: 포트 ${PORT}`));
