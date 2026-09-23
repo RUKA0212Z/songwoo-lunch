@@ -257,6 +257,33 @@ socket.on('admin:login', (password) => {
     broadcastState();
   });
 
+  socket.on('cancelReservation', ({ reservationId, className, number }) => {
+    const res = reservations.find(r => r.id === reservationId);
+    if (!res) return;
+    if (res.status !== 'waiting') {
+      socket.emit('cancel:error', '이미 진행 중이거나 완료된 예약은 취소할 수 없어요');
+      return;
+    }
+    // 본인 확인 (요청자가 이 예약에 속한 사람인지)
+    const isMember = res.members.some(m => m.className === className && m.number === number);
+    if (!isMember) return;
+
+    const idx = reservations.indexOf(res);
+    reservations.splice(idx, 1);
+
+    // 취소된 예약이 현재 진행중이었거나 그 앞이었으면 순번 인덱스 보정
+    if (currentTurnIndex === idx) {
+      // 다음 사람으로 재조정 (인덱스가 하나 당겨졌으므로 그대로 findEligible부터 재탐색)
+      currentTurnIndex -= 1;
+      advanceToNextEligible();
+      tryAssignTurn();
+    } else if (currentTurnIndex > idx) {
+      currentTurnIndex -= 1;
+    }
+
+    broadcastState();
+  });
+
   socket.on('admin:reset', () => {
     if (!socket.data.isAdmin) return; // 관리자 인증 안 됐으면 무시
     reservations = [];

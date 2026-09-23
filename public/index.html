@@ -231,12 +231,16 @@
       </div>
 
       <div class="card" id="reserveCard">
-        <h2>예약 방식</h2>
-        <div class="two-col">
-          <button class="btn btn-primary" onclick="openModal('modalSolo')">개인 예약</button>
-          <button class="btn btn-outline" onclick="openModal('modalGroup')">모둠 예약</button>
-        </div>
+      <h2>예약 방식</h2>
+      <div class="two-col" id="reserveButtons">
+        <button class="btn btn-primary" onclick="openModal('modalSolo')">개인 예약</button>
+        <button class="btn btn-outline" onclick="openModal('modalGroup')">모둠 예약</button>
       </div>
+      <div id="alreadyReservedBox" style="display:none;">
+        <p class="hero-sub" style="margin-bottom:12px;">이미 예약을 하셨습니다.</p>
+        <button class="btn btn-outline" onclick="cancelReservation()">예약 취소</button>
+      </div>
+    </div>
 
       <div class="card">
         <h2>🍱 오늘의 급식</h2>
@@ -388,6 +392,7 @@
         socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
         socket.on('group:joinError', (msg) => showToast(msg));
         socket.on('reserve:error', (msg) => showToast(msg));
+        socket.on('cancel:error', (msg) => showToast(msg));
         socket.on('confirmSeat:error', (msg) => {
           showToast(msg);
           awaitingConfirm = false;
@@ -429,6 +434,7 @@
     socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
     socket.on('group:joinError', (msg) => showToast(msg));
     socket.on('reserve:error', (msg) => showToast(msg));
+    socket.on('cancel:error', (msg) => showToast(msg));
     socket.on('confirmSeat:error', (msg) => {
       showToast(msg);
       awaitingConfirm = false;
@@ -594,6 +600,13 @@ function confirmSeatNow(seatId){
     if(!mine) return;
     socket.emit('release', { reservationId: mine.id });
   }
+  function cancelReservation(){
+    const mine = state.reservations.find(isMine);
+    if(!mine) return;
+    if(!confirm('예약을 취소하시겠어요?')) return;
+    socket.emit('cancelReservation', { reservationId: mine.id, className: me.className, number: me.number });
+  }
+
   function isMine(r){
     return r.members.some(m => m.className === me.className && m.number === me.number);
   }
@@ -633,8 +646,14 @@ function confirmSeatNow(seatId){
         `현재 진행 순번: ${state.currentTurnIndex + 1}번`;
     }
 
-    const reserveButtons = document.querySelectorAll('#reserveCard .btn');
-    reserveButtons.forEach(b => b.disabled = !state.reservationsOpen);
+    const hasReservation = !!mine;
+    document.getElementById('reserveButtons').style.display = hasReservation ? 'none' : 'flex';
+    document.getElementById('alreadyReservedBox').style.display = hasReservation ? 'block' : 'none';
+
+    if(!hasReservation){
+      const reserveButtons = document.querySelectorAll('#reserveButtons .btn');
+      reserveButtons.forEach(b => b.disabled = !state.reservationsOpen);
+    }
 
     const groupCard = document.getElementById('groupStatusCard');
     if(mine && mine.type === 'group'){
