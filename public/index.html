@@ -230,7 +230,7 @@
         <button class="btn btn-outline" id="releaseBtn" style="display:none; margin-top:14px;" onclick="releaseSeat()">취식 완료 (퇴식)</button>
       </div>
 
-      <div class="card" id="reserveCard">
+    <div class="card" id="reserveCard">
       <h2>예약 방식</h2>
       <div class="two-col" id="reserveButtons">
         <button class="btn btn-primary" onclick="openModal('modalSolo')">개인 예약</button>
@@ -497,9 +497,9 @@
     closeModal('modalSolo');
   }
   function createGroup(){
-      socket.emit('group:create', { className: me.className, number: me.number, name: me.name });
-    }
-    function submitGroup(){
+    socket.emit('group:create', { className: me.className, number: me.number, name: me.name });
+  }
+  function submitGroup(){
     const myPendingGroup = (state.pendingGroups || []).find(
       g => g.members.some(m => m.className === me.className && m.number === me.number)
     );
@@ -658,9 +658,6 @@ function confirmSeatNow(seatId){
     document.getElementById('reserveButtons').style.display = lockButtons ? 'none' : 'flex';
     document.getElementById('alreadyReservedBox').style.display = lockButtons ? 'block' : 'none';
 
-    const cancelBtn = document.getElementById('cancelReservationBtn') || null;
-    if(cancelBtn) cancelBtn.style.display = hasReservation ? 'inline-flex' : 'none';
-
     if(!lockButtons){
       const reserveButtons = document.querySelectorAll('#reserveButtons .btn');
       reserveButtons.forEach(b => b.disabled = !state.reservationsOpen);
@@ -683,7 +680,7 @@ function confirmSeatNow(seatId){
     } else if(myPendingGroup){
       groupCard.style.display = 'block';
       document.getElementById('groupInfoText').innerHTML =
-        `코드 <b>${myPendingGroup.code}</b> · ${myPendingGroup.members.length}명 참여 중 (최대 ${myPendingGroup.members.length >= 6 ? '도달' : '6'}명)`;
+        `코드 <b>${myPendingGroup.code}</b> · ${myPendingGroup.members.length}명 참여 중`;
       document.getElementById('groupSkipChip').style.display = 'none';
       const submitBtn = document.getElementById('groupSubmitBtn');
       submitBtn.style.display = 'block';
