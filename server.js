@@ -204,6 +204,16 @@ socket.on('admin:login', (password) => {
     broadcastState();
   });
 
+  socket.on('group:leave', ({ code, className, number }) => {
+  const group = pendingGroups.find(g => g.code === code);
+  if (!group) return;
+  group.members = group.members.filter(m => !(m.className === className && m.number === number));
+  if (group.members.length === 0) {
+    pendingGroups = pendingGroups.filter(g => g.code !== code);
+  }
+  broadcastState();
+});
+  
   socket.on('admin:openReservations', () => {
     if (!socket.data.isAdmin) return;
     reservationsOpen = true;
