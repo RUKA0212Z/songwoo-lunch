@@ -290,7 +290,7 @@
 
   <div id="turnAlert">
     <div class="label">내 차례입니다</div>
-    <div class="seatnum">카메라로 QR을 인식합니다</div>
+    <div class="seatnum" id="turnCountdown">5:00</div>
     <video id="scanVideo" autoplay playsinline muted></video>
     <canvas id="scanCanvas"></canvas>
     <div id="scanStatus">카메라 준비 중...</div>
@@ -611,6 +611,21 @@
     return Object.values(r.seatConfirmedBy).some(m => m.className === me.className && m.number === me.number);
   }
 
+let countdownInterval = null;
+function startCountdownDisplay(){
+  if(countdownInterval) return;
+  countdownInterval = setInterval(() => {
+    if(!state || !state.turnDeadline){
+      document.getElementById('turnCountdown').textContent = '';
+      return;
+    }
+    const remain = Math.max(0, state.turnDeadline - Date.now());
+    const m = Math.floor(remain / 60000);
+    const s = Math.floor((remain % 60000) / 1000);
+    document.getElementById('turnCountdown').textContent = `${m}:${s.toString().padStart(2,'0')}`;
+  }, 500);
+}
+  
 function render(){
   if(!state) return;
   const mine = state.reservations.find(isMine);
@@ -698,6 +713,7 @@ function render(){
   document.getElementById('turnAlert').classList.toggle('active', !!myTurn);
   if(myTurn && !scanning) startScan();
   if(!myTurn && scanning) stopScan();
+  startCountdownDisplay();
 
   if(mine){
     const iConfirmedNow = hasIConfirmed(mine);
