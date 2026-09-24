@@ -48,7 +48,6 @@
     overflow:hidden;
   }
 
-  /* ---------- 로그인 ---------- */
   #loginScreen{
     position:absolute; inset:0; z-index:100;
     background:linear-gradient(150deg, var(--primary) 0%, var(--primary-deep) 100%);
@@ -68,7 +67,6 @@
   .login-tabs .btn{margin-top:0;}
   #loginError{color:var(--danger); font-size:12.5px; margin-top:8px; display:none;}
 
-  /* ---------- header ---------- */
   .topbar{
     flex-shrink:0;
     padding:calc(env(safe-area-inset-top,0px) + 12px) 22px 18px;
@@ -116,14 +114,12 @@
   .two-col{display:flex; gap:10px;}
   .two-col .btn{margin-top:0;}
 
-  /* 급식 메뉴 카드 */
   .menu-date{font-size:12px; color:var(--sub); font-weight:600; margin-bottom:2px;}
   .menu-list{display:flex; flex-direction:column; gap:8px; margin-top:10px;}
   .menu-item{display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--line); font-size:14px;}
   .menu-item:last-child{border-bottom:none;}
   .menu-icon{width:30px; height:30px; border-radius:9px; background:var(--orange-soft); display:flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0;}
 
-  /* 좌석 지도 */
   .legend{display:flex; gap:16px; margin:2px 0 16px; font-size:12px; color:var(--sub); font-weight:600;}
   .legend span{display:flex; align-items:center; gap:6px;}
   .dot{width:10px; height:10px; border-radius:4px; display:inline-block;}
@@ -136,7 +132,6 @@
   .seat.pending{background:var(--seat-pending); color:#fff;}
   .seat.mine{background:var(--seat-mine); color:#fff; box-shadow:0 0 0 2.5px #fff, 0 0 0 5px var(--seat-mine);}
 
-  /* 차례 알림 */
   #turnAlert{
     display:none; position:absolute; inset:0; z-index:50;
     background:linear-gradient(180deg, var(--primary-deep) 0%, #b8323e 100%); color:#fff;
@@ -188,7 +183,6 @@
 <body>
 <div id="app">
 
-  <!-- ============ 로그인 ============ -->
   <div id="loginScreen">
     <div class="login-card">
       <h2 id="loginTitle" onclick="handleTitleTap()" style="cursor:default;">급식줄 예약</h2>
@@ -202,14 +196,12 @@
       <div class="login-tabs">
         <button class="btn btn-primary" onclick="login(false)">학생으로 입장</button>
       </div>
-
       <div id="adminSecretBox" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--line);">
         <input type="password" id="adminPasswordInput" placeholder="관리자 비밀번호">
         <button class="btn btn-outline" style="margin-top:10px;" onclick="tryAdminLogin()">관리자 인증</button>
       </div>
     </div>
   </div>
-
 
   <div class="topbar">
     <div class="greet">송우고 급식 예약</div>
@@ -218,7 +210,6 @@
 
   <div class="content-area">
 
-    <!-- ============ 홈 ============ -->
     <div class="screen active" id="screen-home">
       <div class="hero-card">
         <div class="hero-top">
@@ -231,16 +222,16 @@
       </div>
 
       <div class="card" id="reserveCard">
-      <h2>예약 방식</h2>
-      <div class="two-col" id="reserveButtons">
-        <button class="btn btn-primary" onclick="openModal('modalSolo')">개인 예약</button>
-        <button class="btn btn-outline" onclick="openModal('modalGroup')">모둠 예약</button>
+        <h2>예약 방식</h2>
+        <div class="two-col" id="reserveButtons">
+          <button class="btn btn-primary" id="soloReserveBtn" onclick="openModal('modalSolo')">개인 예약</button>
+          <button class="btn btn-outline" id="groupReserveBtn" onclick="submitGroup()">모둠 예약</button>
+        </div>
+        <div id="alreadyReservedBox" style="display:none;">
+          <p class="hero-sub" style="margin-bottom:12px;">이미 예약을 하셨습니다.</p>
+          <button class="btn btn-outline" onclick="cancelReservation()">예약 취소</button>
+        </div>
       </div>
-      <div id="alreadyReservedBox" style="display:none;">
-        <p class="hero-sub" style="margin-bottom:12px;">이미 예약을 하셨습니다.</p>
-        <button class="btn btn-outline" onclick="cancelReservation()">예약 취소</button>
-      </div>
-    </div>
 
       <div class="card">
         <h2>🍱 오늘의 급식</h2>
@@ -249,9 +240,18 @@
       </div>
 
       <div class="card" id="groupStatusCard" style="display:none;">
-        <h2>현재 모둠 상태</h2>
-        <div class="hero-sub" id="groupInfoText" style="margin-bottom:10px;"></div>
-        <span class="chip chip-danger" id="groupSkipChip" style="display:none;">스킵 1회 · 우선 확보 대기중</span>
+        <h2>모둠 상태</h2>
+        <div id="groupNoGroupBox">
+          <p class="hero-sub" style="margin-bottom:12px;">모둠으로 예약하려면 코드를 만들거나 친구 코드로 참여하세요.</p>
+          <div class="two-col">
+            <button class="btn btn-primary" onclick="openModal('modalGroup'); switchGroupTab('create')">모둠 생성</button>
+            <button class="btn btn-outline" onclick="openModal('modalGroup'); switchGroupTab('join')">모둠 참여</button>
+          </div>
+        </div>
+        <div id="groupHasInfoBox" style="display:none;">
+          <div class="hero-sub" id="groupInfoText" style="margin-bottom:10px;"></div>
+          <span class="chip chip-danger" id="groupSkipChip" style="display:none;">스킵 1회 · 우선 확보 대기중</span>
+        </div>
       </div>
 
       <div class="card" id="adminCard" style="display:none;">
@@ -261,9 +261,8 @@
         <button class="btn btn-outline" style="margin-top:10px;" onclick="adminReset()">전체 초기화</button>
       </div>
 
-    </div>  <!-- ← 이 줄 추가 (screen-home 닫기) -->
+    </div>
 
-    <!-- ============ 좌석 지도 ============ -->
     <div class="screen" id="screen-map" style="padding-top:18px;">
       <div class="legend">
         <span><i class="dot" style="background:var(--seat-empty);"></i>빈자리</span>
@@ -274,7 +273,6 @@
       <div id="seatMapContainer"></div>
     </div>
 
-    <!-- ============ 마이페이지 ============ -->
     <div class="screen" id="screen-my" style="padding-top:18px;">
       <div class="card">
         <h2>예약 대기열 전체</h2>
@@ -289,17 +287,15 @@
 
   </div>
 
-  <!-- ============ 차례 알림 ============ -->
   <div id="turnAlert">
-  <div class="label">내 차례입니다</div>
-  <div class="seatnum">카메라로 QR을 인식합니다</div>
-  <video id="scanVideo" autoplay playsinline muted></video>
-  <canvas id="scanCanvas"></canvas>
-  <div id="scanStatus">카메라 준비 중...</div>
-  <button class="btn btn-outline" style="width:200px; border-color:rgba(255,255,255,.3); color:#fff; background:transparent;" onclick="confirmSeatNow()">착석 인증 완료 (임시)</button>
+    <div class="label">내 차례입니다</div>
+    <div class="seatnum">카메라로 QR을 인식합니다</div>
+    <video id="scanVideo" autoplay playsinline muted></video>
+    <canvas id="scanCanvas"></canvas>
+    <div id="scanStatus">카메라 준비 중...</div>
+    <button class="btn btn-outline" style="width:200px; border-color:rgba(255,255,255,.3); color:#fff; background:transparent;" onclick="confirmSeatNow()">착석 인증 완료 (임시)</button>
   </div>
 
-  <!-- ============ 모달: 개인예약 ============ -->
   <div class="modal-bg" id="modalSolo" onclick="if(event.target===this) closeModal('modalSolo')">
     <div class="modal">
       <h3>개인 예약 확인</h3>
@@ -309,17 +305,15 @@
     </div>
   </div>
 
-  <!-- ============ 모달: 모둠예약 ============ -->
   <div class="modal-bg" id="modalGroup" onclick="if(event.target===this) closeModal('modalGroup')">
     <div class="modal">
-      <h3>모둠 예약</h3>
+      <h3>모둠</h3>
       <div class="two-col" style="margin-bottom:14px;">
         <button class="btn btn-primary" id="tabCreate" onclick="switchGroupTab('create')">코드 생성</button>
         <button class="btn btn-outline" id="tabJoin" onclick="switchGroupTab('join')">코드 입력</button>
       </div>
       <div id="groupCreateBox">
-        <p class="hero-sub">모둠 인원 수를 입력하면 코드가 발급됩니다.</p>
-        <input type="text" id="groupSizeInput" placeholder="모둠 인원 수 (예: 6)">
+        <p class="hero-sub">코드를 발급받으면 친구들이 그 코드로 참여할 수 있어요.</p>
         <button class="btn btn-orange" style="margin-top:14px;" onclick="createGroup()">코드 발급받기</button>
       </div>
       <div id="groupJoinBox" style="display:none;">
@@ -332,7 +326,6 @@
 
   <div id="toast"></div>
 
-  <!-- ============ 하단 네비게이션 ============ -->
   <div class="navbar">
     <div class="nav-item active" data-screen="screen-home" onclick="switchScreen('screen-home', this)">
       <div class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg></div>홈
@@ -348,7 +341,7 @@
 </div>
 
 <script>
- const classSel = document.getElementById('loginClass');
+  const classSel = document.getElementById('loginClass');
   const numSel = document.getElementById('loginNumber');
   for(let i=1;i<=10;i++){ const o=document.createElement('option'); o.value=i; o.textContent=`${i}반`; classSel.appendChild(o); }
   for(let i=1;i<=21;i++){ const o=document.createElement('option'); o.value=i; o.textContent=`${i}번`; numSel.appendChild(o); }
@@ -360,7 +353,6 @@
   let prevMyLocked = false;
   let prevIConfirmed = false;
 
-  // ---------- 관리자 숨김 진입 ----------
   let titleTapCount = 0;
   let titleTapTimer = null;
   function handleTitleTap(){
@@ -391,12 +383,10 @@
         socket.on('state', (s) => { state = s; render(); });
         socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
         socket.on('group:joinError', (msg) => showToast(msg));
+        socket.on('group:submitError', (msg) => showToast(msg));
         socket.on('reserve:error', (msg) => showToast(msg));
         socket.on('cancel:error', (msg) => showToast(msg));
-        socket.on('confirmSeat:error', (msg) => {
-          showToast(msg);
-          awaitingConfirm = false;
-        });
+        socket.on('confirmSeat:error', (msg) => { showToast(msg); awaitingConfirm = false; });
         socket.on('confirmSeat:success', () => {
           awaitingConfirm = false;
           stopScan();
@@ -411,7 +401,6 @@
     });
   }
 
-  // ---------- 학생 로그인 ----------
   function login(isAdmin){
     const name = document.getElementById('loginName').value.trim();
     const className = classSel.value;
@@ -433,12 +422,10 @@
     socket.on('state', (s) => { state = s; render(); });
     socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
     socket.on('group:joinError', (msg) => showToast(msg));
+    socket.on('group:submitError', (msg) => showToast(msg));
     socket.on('reserve:error', (msg) => showToast(msg));
     socket.on('cancel:error', (msg) => showToast(msg));
-    socket.on('confirmSeat:error', (msg) => {
-      showToast(msg);
-      awaitingConfirm = false;
-    });
+    socket.on('confirmSeat:error', (msg) => { showToast(msg); awaitingConfirm = false; });
     socket.on('confirmSeat:success', () => {
       awaitingConfirm = false;
       stopScan();
@@ -495,9 +482,7 @@
     closeModal('modalSolo');
   }
   function createGroup(){
-    const size = document.getElementById('groupSizeInput').value;
-    if(!size){ showToast('인원 수를 입력하세요'); return; }
-    socket.emit('group:create', { className: me.className, number: me.number, name: me.name, size });
+    socket.emit('group:create', { className: me.className, number: me.number, name: me.name });
   }
   function joinGroup(){
     const code = document.getElementById('groupCodeInput').value.trim().toUpperCase();
@@ -505,95 +490,97 @@
     socket.emit('group:join', { className: me.className, number: me.number, name: me.name, code });
     closeModal('modalGroup');
   }
+  function submitGroup(){
+    const myPendingGroup = (state.pendingGroups || []).find(
+      g => g.members.some(m => m.className === me.className && m.number === me.number)
+    );
+    if(!myPendingGroup){ showToast('먼저 모둠을 생성하거나 참여하세요'); return; }
+    socket.emit('group:submit', { code: myPendingGroup.code, className: me.className, number: me.number });
+  }
   function adminOpenReservations(){ socket.emit('admin:openReservations'); }
   function adminStart(){ socket.emit('admin:start'); }
   function adminReset(){ socket.emit('admin:reset'); }
-  
 
+  let scanStream = null;
+  let scanRAF = null;
+  let scanning = false;
+  let awaitingConfirm = false;
+  let scanErrorTimer = null;
 
-  const VALID_SEAT_CODES = ['SEAT-A1', 'SEAT-A2', 'SEAT-A3', 'SEAT-A4', 'SEAT-B1', 'SEAT-B2'];
- 
-let scanStream = null;
-let scanRAF = null;
-let scanning = false;
-let awaitingConfirm = false;
-let scanErrorTimer = null;
+  function startScan(){
+    if(scanning) return;
+    scanning = true;
+    awaitingConfirm = false;
+    const video = document.getElementById('scanVideo');
+    const statusEl = document.getElementById('scanStatus');
 
-function startScan(){
-  if(scanning) return;
-  scanning = true;
-  awaitingConfirm = false;
-  const video = document.getElementById('scanVideo');
-  const statusEl = document.getElementById('scanStatus');
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      .then(stream => {
+        scanStream = stream;
+        video.srcObject = stream;
+        video.play().catch(err => console.error('video play 실패:', err));
+        statusEl.textContent = 'QR을 화면 안에 맞춰주세요';
+        requestAnimationFrame(scanLoop);
+      })
+      .catch(() => {
+        statusEl.textContent = '카메라 권한을 허용해주세요';
+      });
+  }
 
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-    .then(stream => {
-      scanStream = stream;
-      video.srcObject = stream;
-      video.play().catch(err => console.error('video play 실패:', err));
-      statusEl.textContent = 'QR을 화면 안에 맞춰주세요';
-      requestAnimationFrame(scanLoop);
-    })
-    .catch(() => {
-      statusEl.textContent = '카메라 권한을 허용해주세요';
-    });
-}
+  function scanLoop(){
+    if(!scanning) return;
+    const video = document.getElementById('scanVideo');
+    const canvas = document.getElementById('scanCanvas');
+    const statusEl = document.getElementById('scanStatus');
 
-function scanLoop(){
-  if(!scanning) return;
-  const video = document.getElementById('scanVideo');
-  const canvas = document.getElementById('scanCanvas');
-  const statusEl = document.getElementById('scanStatus');
+    if(!awaitingConfirm && video.readyState === video.HAVE_ENOUGH_DATA){
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(imageData.data, imageData.width, imageData.height);
 
-  // 서버 응답 기다리는 중엔 새 QR 인식은 건너뛰되, 카메라는 계속 켜둠 (검은화면 방지)
-  if(!awaitingConfirm && video.readyState === video.HAVE_ENOUGH_DATA){
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const code = jsQR(imageData.data, imageData.width, imageData.height);
+      if(code){
+        const seatId = code.data.trim().toUpperCase().replace('SEAT-', '');
+        awaitingConfirm = true;
+        statusEl.textContent = '확인 중...';
+        confirmSeatNow(seatId);
+      } else {
+        statusEl.textContent = 'QR을 화면 안에 맞춰주세요';
+      }
+    }
+    scanRAF = requestAnimationFrame(scanLoop);
+  }
 
-    if(code){
-      const seatId = code.data.trim().toUpperCase().replace('SEAT-', '');
-      awaitingConfirm = true;
-      statusEl.textContent = '확인 중...';
-      confirmSeatNow(seatId);
-    } else {
-      statusEl.textContent = 'QR을 화면 안에 맞춰주세요';
+  function stopScan(){
+    scanning = false;
+    awaitingConfirm = false;
+    if(scanRAF) cancelAnimationFrame(scanRAF);
+    if(scanStream){
+      scanStream.getTracks().forEach(t => t.stop());
+      scanStream = null;
     }
   }
-  scanRAF = requestAnimationFrame(scanLoop);
-}
 
-function stopScan(){
-  scanning = false;
-  awaitingConfirm = false;
-  if(scanRAF) cancelAnimationFrame(scanRAF);
-  if(scanStream){
-    scanStream.getTracks().forEach(t => t.stop());
-    scanStream = null;
+  function confirmSeatNow(seatId){
+    const mine = state.reservations.find(isMine);
+    if(!mine){
+      showToast('예약 정보를 찾을 수 없어요');
+      awaitingConfirm = false;
+      return;
+    }
+    const finalSeatId = seatId || (mine.pendingSeatIds || []).find(id => !(mine.confirmedSeatIds || []).includes(id));
+    if(!finalSeatId){
+      showToast('아직 좌석이 배정되지 않았어요. 잠시 후 다시 시도해주세요');
+      awaitingConfirm = false;
+      return;
+    }
+    socket.emit('confirmSeat', {
+      reservationId: mine.id, seatId: finalSeatId,
+      className: me.className, number: me.number, name: me.name
+    });
   }
-}
-
-function confirmSeatNow(seatId){
-  const mine = state.reservations.find(isMine);
-  if(!mine){
-    showToast('예약 정보를 찾을 수 없어요');
-    awaitingConfirm = false;
-    return;
-  }
-  const finalSeatId = seatId || (mine.pendingSeatIds || []).find(id => !(mine.confirmedSeatIds || []).includes(id));
-  if(!finalSeatId){
-    showToast('아직 좌석이 배정되지 않았어요. 잠시 후 다시 시도해주세요');
-    awaitingConfirm = false;
-    return;
-  }
-  socket.emit('confirmSeat', {
-    reservationId: mine.id, seatId: finalSeatId,
-    className: me.className, number: me.number, name: me.name
-  });
-}
 
   function releaseSeat(){
     const mine = state.reservations.find(isMine);
@@ -618,6 +605,9 @@ function confirmSeatNow(seatId){
   function render(){
     if(!state) return;
     const mine = state.reservations.find(isMine);
+    const myPendingGroup = (state.pendingGroups || []).find(
+      g => g.members.some(m => m.className === me.className && m.number === me.number)
+    );
 
     if(mine){
       const idx = state.reservations.indexOf(mine);
@@ -651,35 +641,52 @@ function confirmSeatNow(seatId){
     document.getElementById('alreadyReservedBox').style.display = hasReservation ? 'block' : 'none';
 
     if(!hasReservation){
-      const reserveButtons = document.querySelectorAll('#reserveButtons .btn');
-      reserveButtons.forEach(b => b.disabled = !state.reservationsOpen);
+      const soloBtn = document.getElementById('soloReserveBtn');
+      soloBtn.disabled = !state.reservationsOpen;
+
+      const groupBtn = document.getElementById('groupReserveBtn');
+      groupBtn.disabled = !state.reservationsOpen || !myPendingGroup;
+      groupBtn.textContent = myPendingGroup ? `모둠 예약 (${myPendingGroup.members.length}명)` : '모둠 예약';
     }
 
     const groupCard = document.getElementById('groupStatusCard');
-    if(mine && mine.type === 'group'){
-      groupCard.style.display = 'block';
-      const confirmedCount = (mine.confirmedSeatIds || []).length;
-      const inProgress = state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting';
-      document.getElementById('groupInfoText').innerHTML =
-        `코드 <b>${mine.groupCode}</b> · ${mine.members.length}/${mine.size}명 참여` +
-        (inProgress ? `<br>착석 인증 ${confirmedCount}/${mine.size}명 완료` : '');
-      document.getElementById('groupSkipChip').style.display = mine.priorityLocked ? 'inline-flex' : 'none';
+    const noGroupBox = document.getElementById('groupNoGroupBox');
+    const hasInfoBox = document.getElementById('groupHasInfoBox');
+
+    if(mine && mine.type === 'solo'){
+      groupCard.style.display = 'none';
     } else {
-          groupCard.style.display = 'none';
+      groupCard.style.display = 'block';
+      if(mine && mine.type === 'group'){
+        noGroupBox.style.display = 'none';
+        hasInfoBox.style.display = 'block';
+        const confirmedCount = (mine.confirmedSeatIds || []).length;
+        const inProgress = state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting';
+        document.getElementById('groupInfoText').innerHTML =
+          `코드 <b>${mine.groupCode}</b> · ${mine.members.map(m=>m.name).join(', ')} (${mine.members.length}명, 예약 확정)` +
+          (inProgress ? `<br>착석 인증 ${confirmedCount}/${mine.size}명 완료` : '');
+        document.getElementById('groupSkipChip').style.display = mine.priorityLocked ? 'inline-flex' : 'none';
+      } else if(myPendingGroup){
+        noGroupBox.style.display = 'none';
+        hasInfoBox.style.display = 'block';
+        document.getElementById('groupInfoText').innerHTML =
+          `코드 <b>${myPendingGroup.code}</b> · ${myPendingGroup.members.map(m=>m.name).join(', ')} (${myPendingGroup.members.length}명 참여 중)`;
+        document.getElementById('groupSkipChip').style.display = 'none';
+      } else {
+        noGroupBox.style.display = 'block';
+        hasInfoBox.style.display = 'none';
+      }
     }
 
     const myTurn = mine && state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting' && !hasIConfirmed(mine);
-document.getElementById('turnAlert').classList.toggle('active', !!myTurn);
-if(myTurn && !scanning) startScan();
-if(!myTurn && scanning) stopScan();
-    
+    document.getElementById('turnAlert').classList.toggle('active', !!myTurn);
+    if(myTurn && !scanning) startScan();
+    if(!myTurn && scanning) stopScan();
+
     if(mine){
       const iConfirmedNow = hasIConfirmed(mine);
       if(!prevIConfirmed && iConfirmedNow){
         showToast('착석 인증 완료!');
-      }
-      if(prevMyStatus === 'waiting' && mine.status === 'assigned' && !iConfirmedNow){
-        // (개인 인증 토스트를 이미 위에서 띄웠으므로, 그룹 전체 완료 시점엔 중복 안내 생략)
       }
       if(!prevMyLocked && mine.priorityLocked && mine.status === 'waiting'){
         showToast('자리가 없어 스킵됐어요. 우선 확보 대기중입니다');
@@ -721,24 +728,24 @@ if(!myTurn && scanning) stopScan();
     const queueEl = document.getElementById('queueList');
     queueEl.innerHTML = '';
     state.reservations.forEach((r, i) => {
-  const div = document.createElement('div');
-  div.className = 'history-item';
-  const label = r.type === 'group'
-    ? `모둠(${r.groupCode}) ${r.members.map(m=>m.name).join(', ')} · ${r.size}인`
-    : `${r.className}반 ${r.number}번 · ${r.name}`;
-  let tagClass = 'wait', tagText = '대기중';
-  if(r.status === 'assigned'){ tagClass='ok'; tagText=`배정 (${r.seatIds.join(',')})`; }
-  else if(r.status === 'released'){ tagClass='ok'; tagText='퇴식 완료'; }
-  else if(r.priorityLocked){ tagClass='skip'; tagText='우선확보 대기'; }
-  else if(i === state.currentTurnIndex){
-    tagClass='skip';
-    tagText = r.pendingSeatIds && r.pendingSeatIds.length
-      ? `대기중 QR: ${r.pendingSeatIds.join(',')}`
-      : '진행중 (좌석 미확정)';
-  }
-  div.innerHTML = `<span>${i+1}. ${label}</span><span class="tag ${tagClass}">${tagText}</span>`;
-  queueEl.appendChild(div);
-});
+      const div = document.createElement('div');
+      div.className = 'history-item';
+      const label = r.type === 'group'
+        ? `모둠(${r.groupCode}) ${r.members.map(m=>m.name).join(', ')} · ${r.size}인`
+        : `${r.className}반 ${r.number}번 · ${r.name}`;
+      let tagClass = 'wait', tagText = '대기중';
+      if(r.status === 'assigned'){ tagClass='ok'; tagText=`배정 (${r.seatIds.join(',')})`; }
+      else if(r.status === 'released'){ tagClass='ok'; tagText='퇴식 완료'; }
+      else if(r.priorityLocked){ tagClass='skip'; tagText='우선확보 대기'; }
+      else if(i === state.currentTurnIndex){
+        tagClass='skip';
+        tagText = r.pendingSeatIds && r.pendingSeatIds.length
+          ? `대기중 QR: ${r.pendingSeatIds.join(',')}`
+          : '진행중 (좌석 미확정)';
+      }
+      div.innerHTML = `<span>${i+1}. ${label}</span><span class="tag ${tagClass}">${tagText}</span>`;
+      queueEl.appendChild(div);
+    });
 
     document.getElementById('accountText').textContent =
       me.isAdmin ? '관리자 계정' : `${me.className}반 ${me.number}번 · ${me.name}`;
