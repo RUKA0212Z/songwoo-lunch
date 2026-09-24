@@ -245,8 +245,8 @@
         <div id="groupHasInfoBox" style="display:none;">
           <div class="hero-sub" id="groupInfoText" style="margin-bottom:10px;"></div>
           <span class="chip chip-danger" id="groupSkipChip" style="display:none;">스킵 1회 · 우선 확보 대기중</span>
+          <button class="btn btn-outline" id="groupLeaveBtn" style="display:none; margin-top:10px;" onclick="leaveGroup()">모둠 탈퇴</button>
         </div>
-      </div>
 
       <div class="card">
         <h2>🍱 오늘의 급식</h2>
@@ -497,6 +497,14 @@
     if(!myPendingGroup){ showToast('먼저 모둠을 생성하거나 참여하세요'); return; }
     socket.emit('group:submit', { code: myPendingGroup.code, className: me.className, number: me.number });
   }
+  function leaveGroup(){
+    const myPendingGroup = (state.pendingGroups || []).find(
+      g => g.members.some(m => m.className === me.className && m.number === me.number)
+    );
+    if(!myPendingGroup) return;
+    if(!confirm('모둠에서 나가시겠어요?')) return;
+    socket.emit('group:leave', { code: myPendingGroup.code, className: me.className, number: me.number });
+  }
   function adminOpenReservations(){ socket.emit('admin:openReservations'); }
   function adminStart(){ socket.emit('admin:start'); }
   function adminReset(){ socket.emit('admin:reset'); }
@@ -602,165 +610,167 @@
     return Object.values(r.seatConfirmedBy).some(m => m.className === me.className && m.number === me.number);
   }
 
-  function render(){
-    if(!state) return;
-    const mine = state.reservations.find(isMine);
-    const myPendingGroup = (state.pendingGroups || []).find(
-      g => g.members.some(m => m.className === me.className && m.number === me.number)
-    );
+function render(){
+  if(!state) return;
+  const mine = state.reservations.find(isMine);
+  const myPendingGroup = (state.pendingGroups || []).find(
+    g => g.members.some(m => m.className === me.className && m.number === me.number)
+  );
 
-    if(mine){
-      const idx = state.reservations.indexOf(mine);
-      document.getElementById('myQueueNum').textContent = idx + 1;
-      let statusText = '대기중', chipClass = 'chip-orange';
-      if(mine.status === 'assigned'){ statusText = '배정 완료'; chipClass = 'chip-yellow'; }
-      else if(mine.status === 'released'){ statusText = '퇴식 완료'; chipClass = 'chip-yellow'; }
-      else if(mine.priorityLocked){ statusText = '우선 확보 대기'; chipClass = 'chip-danger'; }
-      else if(state.currentTurnIndex === idx){ statusText = '내 차례!'; chipClass = 'chip-danger'; }
-      document.getElementById('statusChip').textContent = statusText;
-      document.getElementById('statusChip').className = 'chip ' + chipClass;
-      document.getElementById('releaseBtn').style.display = mine.status === 'assigned' ? 'block' : 'none';
-    } else {
-      document.getElementById('myQueueNum').textContent = '-';
-      document.getElementById('statusChip').textContent = '예약 전';
-      document.getElementById('statusChip').className = 'chip chip-orange';
-      document.getElementById('releaseBtn').style.display = 'none';
-    }
+  if(mine){
+    const idx = state.reservations.indexOf(mine);
+    document.getElementById('myQueueNum').textContent = idx + 1;
+    let statusText = '대기중', chipClass = 'chip-orange';
+    if(mine.status === 'assigned'){ statusText = '배정 완료'; chipClass = 'chip-yellow'; }
+    else if(mine.status === 'released'){ statusText = '퇴식 완료'; chipClass = 'chip-yellow'; }
+    else if(mine.priorityLocked){ statusText = '우선 확보 대기'; chipClass = 'chip-danger'; }
+    else if(state.currentTurnIndex === idx){ statusText = '내 차례!'; chipClass = 'chip-danger'; }
+    document.getElementById('statusChip').textContent = statusText;
+    document.getElementById('statusChip').className = 'chip ' + chipClass;
+    document.getElementById('releaseBtn').style.display = mine.status === 'assigned' ? 'block' : 'none';
+  } else {
+    document.getElementById('myQueueNum').textContent = '-';
+    document.getElementById('statusChip').textContent = '예약 전';
+    document.getElementById('statusChip').className = 'chip chip-orange';
+    document.getElementById('releaseBtn').style.display = 'none';
+  }
 
-    if(!state.reservationsOpen){
-      document.getElementById('currentServingText').textContent = '예약 시작 전이에요';
-    } else {
-      document.getElementById('currentServingText').textContent =
-        !state.adminStarted ? '예약 받는 중이에요' :
-        state.currentTurnIndex === -2 ? '대기열이 모두 처리됐어요' :
-        `현재 진행 순번: ${state.currentTurnIndex + 1}번`;
-    }
+  if(!state.reservationsOpen){
+    document.getElementById('currentServingText').textContent = '예약 시작 전이에요';
+  } else {
+    document.getElementById('currentServingText').textContent =
+      !state.adminStarted ? '예약 받는 중이에요' :
+      state.currentTurnIndex === -2 ? '대기열이 모두 처리됐어요' :
+      `현재 진행 순번: ${state.currentTurnIndex + 1}번`;
+  }
 
-    const hasReservation = !!mine;
-    document.getElementById('reserveButtons').style.display = hasReservation ? 'none' : 'flex';
-    document.getElementById('alreadyReservedBox').style.display = hasReservation ? 'block' : 'none';
+  const hasReservation = !!mine;
+  document.getElementById('reserveButtons').style.display = hasReservation ? 'none' : 'flex';
+  document.getElementById('alreadyReservedBox').style.display = hasReservation ? 'block' : 'none';
 
-    if(!hasReservation){
-      const soloBtn = document.getElementById('soloReserveBtn');
-      soloBtn.disabled = !state.reservationsOpen;
+  if(!hasReservation){
+    const soloBtn = document.getElementById('soloReserveBtn');
+    soloBtn.disabled = !state.reservationsOpen;
 
-      const groupBtn = document.getElementById('groupReserveBtn');
-      groupBtn.disabled = !state.reservationsOpen || !myPendingGroup;
-      groupBtn.textContent = myPendingGroup ? `모둠 예약 (${myPendingGroup.members.length}명)` : '모둠 예약';
-    } else {
-      const cancelBtn = document.getElementById('cancelBtn');
-      if(cancelBtn){
-        cancelBtn.style.display = (mine && mine.status === 'waiting') ? 'block' : 'none';
-      }
-    }
-
-    const groupCard = document.getElementById('groupStatusCard');
-    const noGroupBox = document.getElementById('groupNoGroupBox');
-    const hasInfoBox = document.getElementById('groupHasInfoBox');
-
-    if(mine && mine.type === 'solo'){
-      groupCard.style.display = 'none';
-    } else {
-      groupCard.style.display = 'block';
-      if(mine && mine.type === 'group'){
-        noGroupBox.style.display = 'none';
-        hasInfoBox.style.display = 'block';
-        const confirmedCount = (mine.confirmedSeatIds || []).length;
-        const inProgress = state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting';
-        document.getElementById('groupInfoText').innerHTML =
-          `코드 <b>${mine.groupCode}</b> · ${mine.members.map(m=>m.name).join(', ')} (${mine.members.length}명, 예약 확정)` +
-          (inProgress ? `<br>착석 인증 ${confirmedCount}/${mine.size}명 완료` : '');
-        document.getElementById('groupSkipChip').style.display = mine.priorityLocked ? 'inline-flex' : 'none';
-      } else if(myPendingGroup){
-        noGroupBox.style.display = 'none';
-        hasInfoBox.style.display = 'block';
-        document.getElementById('groupInfoText').innerHTML =
-          `코드 <b>${myPendingGroup.code}</b> · ${myPendingGroup.members.map(m=>m.name).join(', ')} (${myPendingGroup.members.length}명 참여 중)`;
-        document.getElementById('groupSkipChip').style.display = 'none';
-      } else {
-        noGroupBox.style.display = 'block';
-        hasInfoBox.style.display = 'none';
-      }
-    }
-
-    const myTurn = mine && state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting' && !hasIConfirmed(mine);
-    document.getElementById('turnAlert').classList.toggle('active', !!myTurn);
-    if(myTurn && !scanning) startScan();
-    if(!myTurn && scanning) stopScan();
-
-    if(mine){
-      const iConfirmedNow = hasIConfirmed(mine);
-      if(!prevIConfirmed && iConfirmedNow){
-        showToast('착석 인증 완료!');
-      }
-      if(!prevMyLocked && mine.priorityLocked && mine.status === 'waiting'){
-        showToast('자리가 없어 스킵됐어요. 우선 확보 대기중입니다');
-      }
-      prevMyStatus = mine.status;
-      prevMyLocked = mine.priorityLocked;
-      prevIConfirmed = iConfirmedNow;
-    } else {
-      prevIConfirmed = false;
-    }
-
-    const seatMapEl = document.getElementById('seatMapContainer');
-    seatMapEl.innerHTML = '';
-    const byTable = {};
-    state.seats.forEach(s => (byTable[s.tableId] ||= []).push(s));
-    for(const tableId in byTable){
-      const block = document.createElement('div');
-      block.className = 'table-block';
-      const label = document.createElement('div');
-      label.className = 'table-label';
-      label.textContent = `TABLE ${tableId}`;
-      const grid = document.createElement('div');
-      grid.className = 'seat-grid';
-      byTable[tableId].forEach(s => {
-        const seatDiv = document.createElement('div');
-        const mineSeats = mine ? mine.seatIds : [];
-        let cls = 'seat';
-        if(s.status === 'occupied') cls += mineSeats.includes(s.id) ? ' mine' : ' full';
-        else if(s.status === 'pending') cls += ' pending';
-        seatDiv.className = cls;
-        seatDiv.textContent = s.id;
-        grid.appendChild(seatDiv);
-      });
-      block.appendChild(label);
-      block.appendChild(grid);
-      seatMapEl.appendChild(block);
-    }
-
-    const queueEl = document.getElementById('queueList');
-    queueEl.innerHTML = '';
-    state.reservations.forEach((r, i) => {
-      const div = document.createElement('div');
-      div.className = 'history-item';
-      const label = r.type === 'group'
-        ? `모둠(${r.groupCode}) ${r.members.map(m=>m.name).join(', ')} · ${r.size}인`
-        : `${r.className}반 ${r.number}번 · ${r.name}`;
-      let tagClass = 'wait', tagText = '대기중';
-      if(r.status === 'assigned'){ tagClass='ok'; tagText=`배정 (${r.seatIds.join(',')})`; }
-      else if(r.status === 'released'){ tagClass='ok'; tagText='퇴식 완료'; }
-      else if(r.priorityLocked){ tagClass='skip'; tagText='우선확보 대기'; }
-      else if(i === state.currentTurnIndex){
-        tagClass='skip';
-        tagText = r.pendingSeatIds && r.pendingSeatIds.length
-          ? `대기중 QR: ${r.pendingSeatIds.join(',')}`
-          : '진행중 (좌석 미확정)';
-      }
-      div.innerHTML = `<span>${i+1}. ${label}</span><span class="tag ${tagClass}">${tagText}</span>`;
-      queueEl.appendChild(div);
-    });
-
-    document.getElementById('accountText').textContent =
-      me.isAdmin ? '관리자 계정' : `${me.className}반 ${me.number}번 · ${me.name}`;
-
-    const openBtn = document.getElementById('openBtn');
-    if(openBtn){
-      openBtn.textContent = state.reservationsOpen ? '예약 받는 중' : '예약 시작';
-      openBtn.disabled = state.reservationsOpen;
+    const groupBtn = document.getElementById('groupReserveBtn');
+    groupBtn.disabled = !state.reservationsOpen || !myPendingGroup;
+    groupBtn.textContent = myPendingGroup ? `모둠 예약 (${myPendingGroup.members.length}명)` : '모둠 예약';
+  } else {
+    const cancelBtn = document.getElementById('cancelBtn');
+    if(cancelBtn){
+      cancelBtn.style.display = (mine && mine.status === 'waiting') ? 'block' : 'none';
     }
   }
+
+  const groupCard = document.getElementById('groupStatusCard');
+  const noGroupBox = document.getElementById('groupNoGroupBox');
+  const hasInfoBox = document.getElementById('groupHasInfoBox');
+
+  if(mine && mine.type === 'solo'){
+    groupCard.style.display = 'none';
+  } else {
+    groupCard.style.display = 'block';
+    if(mine && mine.type === 'group'){
+      noGroupBox.style.display = 'none';
+      hasInfoBox.style.display = 'block';
+      const confirmedCount = (mine.confirmedSeatIds || []).length;
+      const inProgress = state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting';
+      document.getElementById('groupInfoText').innerHTML =
+        `코드 <b>${mine.groupCode}</b> · ${mine.members.map(m=>m.name).join(', ')} (${mine.members.length}명, 예약 확정)` +
+        (inProgress ? `<br>착석 인증 ${confirmedCount}/${mine.size}명 완료` : '');
+      document.getElementById('groupSkipChip').style.display = mine.priorityLocked ? 'inline-flex' : 'none';
+      document.getElementById('groupLeaveBtn').style.display = 'none';
+    } else if(myPendingGroup){
+      noGroupBox.style.display = 'none';
+      hasInfoBox.style.display = 'block';
+      document.getElementById('groupInfoText').innerHTML =
+        `코드 <b>${myPendingGroup.code}</b> · ${myPendingGroup.members.map(m=>m.name).join(', ')} (${myPendingGroup.members.length}명 참여 중)`;
+      document.getElementById('groupSkipChip').style.display = 'none';
+      document.getElementById('groupLeaveBtn').style.display = 'block';
+    } else {
+      noGroupBox.style.display = 'block';
+      hasInfoBox.style.display = 'none';
+    }
+  }
+
+  const myTurn = mine && state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting' && !hasIConfirmed(mine);
+  document.getElementById('turnAlert').classList.toggle('active', !!myTurn);
+  if(myTurn && !scanning) startScan();
+  if(!myTurn && scanning) stopScan();
+
+  if(mine){
+    const iConfirmedNow = hasIConfirmed(mine);
+    if(!prevIConfirmed && iConfirmedNow){
+      showToast('착석 인증 완료!');
+    }
+    if(!prevMyLocked && mine.priorityLocked && mine.status === 'waiting'){
+      showToast('자리가 없어 스킵됐어요. 우선 확보 대기중입니다');
+    }
+    prevMyStatus = mine.status;
+    prevMyLocked = mine.priorityLocked;
+    prevIConfirmed = iConfirmedNow;
+  } else {
+    prevIConfirmed = false;
+  }
+
+  const seatMapEl = document.getElementById('seatMapContainer');
+  seatMapEl.innerHTML = '';
+  const byTable = {};
+  state.seats.forEach(s => (byTable[s.tableId] ||= []).push(s));
+  for(const tableId in byTable){
+    const block = document.createElement('div');
+    block.className = 'table-block';
+    const label = document.createElement('div');
+    label.className = 'table-label';
+    label.textContent = `TABLE ${tableId}`;
+    const grid = document.createElement('div');
+    grid.className = 'seat-grid';
+    byTable[tableId].forEach(s => {
+      const seatDiv = document.createElement('div');
+      const mineSeats = mine ? mine.seatIds : [];
+      let cls = 'seat';
+      if(s.status === 'occupied') cls += mineSeats.includes(s.id) ? ' mine' : ' full';
+      else if(s.status === 'pending') cls += ' pending';
+      seatDiv.className = cls;
+      seatDiv.textContent = s.id;
+      grid.appendChild(seatDiv);
+    });
+    block.appendChild(label);
+    block.appendChild(grid);
+    seatMapEl.appendChild(block);
+  }
+
+  const queueEl = document.getElementById('queueList');
+  queueEl.innerHTML = '';
+  state.reservations.forEach((r, i) => {
+    const div = document.createElement('div');
+    div.className = 'history-item';
+    const label = r.type === 'group'
+      ? `모둠(${r.groupCode}) ${r.members.map(m=>m.name).join(', ')} · ${r.size}인`
+      : `${r.className}반 ${r.number}번 · ${r.name}`;
+    let tagClass = 'wait', tagText = '대기중';
+    if(r.status === 'assigned'){ tagClass='ok'; tagText=`배정 (${r.seatIds.join(',')})`; }
+    else if(r.status === 'released'){ tagClass='ok'; tagText='퇴식 완료'; }
+    else if(r.priorityLocked){ tagClass='skip'; tagText='우선확보 대기'; }
+    else if(i === state.currentTurnIndex){
+      tagClass='skip';
+      tagText = r.pendingSeatIds && r.pendingSeatIds.length
+        ? `대기중 QR: ${r.pendingSeatIds.join(',')}`
+        : '진행중 (좌석 미확정)';
+    }
+    div.innerHTML = `<span>${i+1}. ${label}</span><span class="tag ${tagClass}">${tagText}</span>`;
+    queueEl.appendChild(div);
+  });
+
+  document.getElementById('accountText').textContent =
+    me.isAdmin ? '관리자 계정' : `${me.className}반 ${me.number}번 · ${me.name}`;
+
+  const openBtn = document.getElementById('openBtn');
+  if(openBtn){
+    openBtn.textContent = state.reservationsOpen ? '예약 받는 중' : '예약 시작';
+    openBtn.disabled = state.reservationsOpen;
+  }
+}
 </script>
 </body>
 </html>
