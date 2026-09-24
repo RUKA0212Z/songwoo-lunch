@@ -229,14 +229,8 @@
         </div>
         <div id="alreadyReservedBox" style="display:none;">
           <p class="hero-sub" style="margin-bottom:12px;">이미 예약을 하셨습니다.</p>
-          <button class="btn btn-outline" onclick="cancelReservation()">예약 취소</button>
+          <button class="btn btn-outline" id="cancelBtn" onclick="cancelReservation()">예약 취소</button>
         </div>
-      </div>
-
-      <div class="card">
-        <h2>🍱 오늘의 급식</h2>
-        <div class="menu-date" id="mealDate">불러오는 중...</div>
-        <div class="menu-list" id="mealList"></div>
       </div>
 
       <div class="card" id="groupStatusCard" style="display:none;">
@@ -252,6 +246,12 @@
           <div class="hero-sub" id="groupInfoText" style="margin-bottom:10px;"></div>
           <span class="chip chip-danger" id="groupSkipChip" style="display:none;">스킵 1회 · 우선 확보 대기중</span>
         </div>
+      </div>
+
+      <div class="card">
+        <h2>🍱 오늘의 급식</h2>
+        <div class="menu-date" id="mealDate">불러오는 중...</div>
+        <div class="menu-list" id="mealList"></div>
       </div>
 
       <div class="card" id="adminCard" style="display:none;">
@@ -647,6 +647,11 @@
       const groupBtn = document.getElementById('groupReserveBtn');
       groupBtn.disabled = !state.reservationsOpen || !myPendingGroup;
       groupBtn.textContent = myPendingGroup ? `모둠 예약 (${myPendingGroup.members.length}명)` : '모둠 예약';
+    } else {
+      const cancelBtn = document.getElementById('cancelBtn');
+      if(cancelBtn){
+        cancelBtn.style.display = (mine && mine.status === 'waiting') ? 'block' : 'none';
+      }
     }
 
     const groupCard = document.getElementById('groupStatusCard');
