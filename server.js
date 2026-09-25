@@ -15,6 +15,10 @@ const NEIS_KEY = process.env.NEIS_KEY || 'e0abd2795b4e49e0aabf24a60a04194c';
 const OFFICE_CODE = 'J10';
 const SCHOOL_CODE = '7530806';
 
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
 app.get('/api/meal', async (req, res) => {
   const kstNow = new Date(Date.now() + 9 * 60 * 60 * 1000);
   const ymd = kstNow.toISOString().slice(0, 10).replace(/-/g, '');
