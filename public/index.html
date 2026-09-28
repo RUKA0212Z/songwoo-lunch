@@ -282,7 +282,7 @@
       <div class="card">
         <h2>계정</h2>
         <div class="hero-sub" id="accountText">-</div>
-        <button class="btn btn-outline" style="margin-top:14px;" onclick="location.reload()">로그아웃</button>
+        <button class="btn btn-outline" style="margin-top:14px;" onclick="logout()">로그아웃</button>
       </div>
     </div>
 
@@ -374,6 +374,7 @@
     adminSocket.emit('admin:login', pw);
     adminSocket.on('admin:loginResult', ({ success }) => {
       if(success){
+        sessionStorage.setItem('lunchAdminPw', pw);
         me = { className:'', number:'', name:'관리자', isAdmin:true };
         document.getElementById('loginScreen').style.display = 'none';
         document.getElementById('userLabel').textContent = '관리자 모드';
@@ -396,6 +397,7 @@
         });
         loadMeal();
       } else {
+        sessionStorage.removeItem('lunchAdminPw');
         showToast('비밀번호가 틀렸어요');
         adminSocket.disconnect();
       }
@@ -413,7 +415,10 @@
     }
     document.getElementById('loginError').style.display = 'none';
 
+    localStorage.setItem('lunchUser', JSON.stringify({ name, className, number }));
+
     me = { className, number, name, isAdmin: false };
+
     document.getElementById('loginScreen').style.display = 'none';
     document.getElementById('userLabel').textContent = `${className}반 ${number}번 · ${name}`;
     document.getElementById('reserveCard').style.display = 'block';
@@ -476,6 +481,12 @@
     t.classList.add('show');
     clearTimeout(toastTimer);
     toastTimer = setTimeout(()=>t.classList.remove('show'), 2400);
+  }
+
+  function logout(){
+    localStorage.removeItem('lunchUser');
+    sessionStorage.removeItem('lunchAdminPw');
+    location.reload();
   }
 
   function reserveSolo(){
@@ -788,6 +799,23 @@ function render(){
     openBtn.disabled = state.reservationsOpen;
   }
 }
+(function autoLogin(){
+  try{
+    const adminPw = sessionStorage.getItem('lunchAdminPw');
+    if(adminPw){
+      document.getElementById('adminPasswordInput').value = adminPw;
+      tryAdminLogin();
+      return;
+    }
+    const saved = JSON.parse(localStorage.getItem('lunchUser') || 'null');
+    if(saved && saved.name){
+      document.getElementById('loginName').value = saved.name;
+      classSel.value = saved.className;
+      numSel.value = saved.number;
+      login(false);
+    }
+  }catch(e){ console.error(e); }
+})();
 </script>
 </body>
 </html>
