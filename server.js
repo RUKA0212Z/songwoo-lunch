@@ -61,11 +61,13 @@ function makeSeats(tableId, count) {
   }));
 }
 function resetSeats() {
-  const rows20 = ['A','B','C','D','E','F','L','M','N','O']; // 테이블 5개 = 20석
+  const rows20 = ['A','B','C','D','E','F']; // 테이블 5개 = 20석
   const rows24 = ['G','H','I','J','K'];                      // 테이블 6개 = 24석
+  const rows202 = ['L','M','N','O']; // 테이블 5개 = 20석
   seats = [
     ...rows20.flatMap(r => makeSeats(r, 20)),
     ...rows24.flatMap(r => makeSeats(r, 24)),
+    ...rows202.flatMap(r => makeSeats(r, 20)),
     ...makeSeats('P', 26), // 대각선 통로
   ];
 }
