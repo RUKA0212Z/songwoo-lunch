@@ -68,7 +68,7 @@ function resetSeats() {
     ...rows20.flatMap(r => makeSeats(r, 20)),
     ...rows24.flatMap(r => makeSeats(r, 24)),
     ...rows202.flatMap(r => makeSeats(r, 20)),
-    ...makeSeats('P', 26), // 대각선 통로
+    ...makeSeats('P', 56), // 대각선 통로
   ];
 }
 resetSeats();
