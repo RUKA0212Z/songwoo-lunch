@@ -42,15 +42,16 @@ app.get('/api/meal', async (req, res) => {
 // ===== 좌석 배정 상태 =====
 const SKIP_CAP = 1;
 const MAX_GROUP_SIZE = 6;
+// 테스트할 때 TURN_TIMEOUT_SEC=20 처럼 주면 5분 대신 20초로 확인 가능
+const TURN_TIMEOUT_MS = (parseInt(process.env.TURN_TIMEOUT_SEC) || 300) * 1000;
+
 let seats = [];
 let reservations = [];
-let pendingGroups = []; // 아직 예약 확정 안 하고 모여만 있는 모둠들
+let pendingGroups = [];
 let currentTurnIndex = -1;
 let adminStarted = false;
 let reservationsOpen = false;
-const TURN_TIMEOUT_MS = 5 * 60 * 1000; // 5분
 let turnTimers = {}; // { [reservationId]: timeoutHandle }
-let currentTurnDeadline = null;
 
 function makeSeats(tableId, count) {
   return Array.from({ length: count }, (_, i) => ({
@@ -60,15 +61,21 @@ function makeSeats(tableId, count) {
     occupiedBy: null,
   }));
 }
+
 function resetSeats() {
-  const rows20 = ['A','B','C','D','E','F']; // 테이블 5개 = 20석
-  const rows24 = ['G','H','I','J','K'];                      // 테이블 6개 = 24석
-  const rows202 = ['L','M','N','O']; // 테이블 5개 = 20석
+  if (process.env.TEST_LAYOUT === '1') {
+    // 우선 확보 모드 테스트용 미니 좌석
+    seats = [...makeSeats('A', 1), ...makeSeats('B', 2)];
+    return;
+  }
+  const rows20 = ['A','B','C','D','E','F'];
+  const rows24 = ['G','H','I','J','K'];
+  const rows202 = ['L','M','N','O'];
   seats = [
     ...rows20.flatMap(r => makeSeats(r, 20)),
     ...rows24.flatMap(r => makeSeats(r, 24)),
     ...rows202.flatMap(r => makeSeats(r, 20)),
-    ...makeSeats('P', 56), // 대각선 통로
+    ...makeSeats('P', 56),
   ];
 }
 resetSeats();
@@ -95,10 +102,19 @@ function reserveSeatsTemporarily(res, chosenSeats) {
   }
 }
 
+// 좌석을 잡고 + 그 예약만의 타이머를 시작 (일반 차례, 우선 확보 둘 다 사용)
+function grantSeatsAndStartTimer(res, chosenSeats) {
+  reserveSeatsTemporarily(res, chosenSeats);
+  res.turnDeadline = Date.now() + TURN_TIMEOUT_MS;
+  if (turnTimers[res.id]) clearTimeout(turnTimers[res.id]);
+  turnTimers[res.id] = setTimeout(() => handleTurnTimeout(res.id), TURN_TIMEOUT_MS);
+}
+
 function finalizeAssignment(res) {
   res.status = 'assigned';
   res.seatIds = res.pendingSeatIds;
   res.pendingSeatIds = [];
+  res.turnDeadline = null;
 }
 
 function checkPriorityLocked() {
@@ -107,7 +123,8 @@ function checkPriorityLocked() {
     if (res.pendingSeatIds && res.pendingSeatIds.length) continue;
     const chosen = findAvailableSeats(res.size);
     if (chosen) {
-      reserveSeatsTemporarily(res, chosen);
+      grantSeatsAndStartTimer(res, chosen);
+      checkPriorityLocked(); // 연쇄 확인
       return;
     }
   }
@@ -123,6 +140,47 @@ function advanceToNextEligible() {
   currentTurnIndex = -2;
 }
 
+function tryAssignTurn() {
+  if (currentTurnIndex < 0) return;
+  const res = reservations[currentTurnIndex];
+  if (!res) return;
+
+  const chosen = findAvailableSeats(res.size);
+  if (chosen) {
+    grantSeatsAndStartTimer(res, chosen);
+  } else {
+    res.skipCount += 1;
+    if (res.skipCount >= SKIP_CAP) res.priorityLocked = true;
+    advanceToNextEligible();
+    tryAssignTurn();
+  }
+}
+
+function handleTurnTimeout(resId) {
+  const res = reservations.find(r => r.id === resId);
+  if (!res || res.status !== 'waiting') return;
+  delete turnTimers[resId];
+
+  const unconfirmed = res.pendingSeatIds.filter(id => !res.confirmedSeatIds.includes(id));
+  for (const seatId of unconfirmed) {
+    const seat = seats.find(s => s.id === seatId);
+    if (seat) { seat.status = 'empty'; seat.occupiedBy = null; }
+  }
+
+  res.seatIds = [...res.confirmedSeatIds];
+  res.pendingSeatIds = [];
+  res.turnDeadline = null;
+  res.status = res.confirmedSeatIds.length > 0 ? 'assigned' : 'expired';
+  res.timedOut = true;
+
+  if (currentTurnIndex === reservations.indexOf(res)) {
+    advanceToNextEligible();
+    tryAssignTurn();
+  }
+  checkPriorityLocked();
+  broadcastState();
+}
+
 function broadcastState() {
   io.emit('state', {
     seats,
@@ -132,37 +190,45 @@ function broadcastState() {
       skipCount: r.skipCount, priorityLocked: r.priorityLocked,
       status: r.status, seatIds: r.seatIds, pendingSeatIds: r.pendingSeatIds,
       confirmedSeatIds: r.confirmedSeatIds, seatConfirmedBy: r.seatConfirmedBy,
+      turnDeadline: r.turnDeadline,
     })),
     pendingGroups,
     currentTurnIndex,
     adminStarted,
     reservationsOpen,
-    turnDeadline: currentTurnDeadline,   // 이 줄 추가
   });
 }
 
-io.on('connection', (socket) => {
-socket.data.isAdmin = false;
+function newReservation(base) {
+  return {
+    id: `r${Date.now()}${Math.floor(Math.random() * 1000)}`,
+    skipCount: 0, priorityLocked: false, status: 'waiting',
+    seatIds: [], pendingSeatIds: [], confirmedSeatIds: [], seatConfirmedBy: {},
+    turnDeadline: null,
+    ...base,
+  };
+}
 
-socket.on('admin:login', (password) => {
-  if (password === ADMIN_PASSWORD) {
-    socket.data.isAdmin = true;
-    socket.emit('admin:loginResult', { success: true });
-  } else {
-    socket.emit('admin:loginResult', { success: false });
-  }
-});
+io.on('connection', (socket) => {
+  socket.data.isAdmin = false;
+
+  socket.on('admin:login', (password) => {
+    if (password === ADMIN_PASSWORD) {
+      socket.data.isAdmin = true;
+      socket.emit('admin:loginResult', { success: true });
+    } else {
+      socket.emit('admin:loginResult', { success: false });
+    }
+  });
 
   broadcastState();
 
   socket.on('reserve:solo', ({ className, number, name }) => {
     if (!reservationsOpen) { socket.emit('reserve:error', '아직 예약을 받지 않아요'); return; }
-    reservations.push({
-      id: `r${Date.now()}${Math.floor(Math.random() * 1000)}`,
+    reservations.push(newReservation({
       className, number, name, type: 'solo', size: 1,
       members: [{ className, number, name }],
-      skipCount: 0, priorityLocked: false, status: 'waiting', seatIds: [], pendingSeatIds: [], confirmedSeatIds: [], seatConfirmedBy: {},
-    });
+    }));
     if (adminStarted && currentTurnIndex === -2) {
       currentTurnIndex = reservations.length - 1;
       tryAssignTurn();
@@ -205,13 +271,11 @@ socket.on('admin:login', (password) => {
     if (!isMember) return;
 
     pendingGroups.splice(idx, 1);
-    reservations.push({
-      id: `r${Date.now()}${Math.floor(Math.random() * 1000)}`,
+    reservations.push(newReservation({
       className: group.members[0].className, number: group.members[0].number, name: group.members[0].name,
       type: 'group', size: group.members.length, groupCode: group.code,
       members: group.members,
-      skipCount: 0, priorityLocked: false, status: 'waiting', seatIds: [], pendingSeatIds: [], confirmedSeatIds: [], seatConfirmedBy: {},
-    });
+    }));
 
     if (adminStarted && currentTurnIndex === -2) {
       currentTurnIndex = reservations.length - 1;
@@ -221,15 +285,15 @@ socket.on('admin:login', (password) => {
   });
 
   socket.on('group:leave', ({ code, className, number }) => {
-  const group = pendingGroups.find(g => g.code === code);
-  if (!group) return;
-  group.members = group.members.filter(m => !(m.className === className && m.number === number));
-  if (group.members.length === 0) {
-    pendingGroups = pendingGroups.filter(g => g.code !== code);
-  }
-  broadcastState();
-});
-  
+    const group = pendingGroups.find(g => g.code === code);
+    if (!group) return;
+    group.members = group.members.filter(m => !(m.className === className && m.number === number));
+    if (group.members.length === 0) {
+      pendingGroups = pendingGroups.filter(g => g.code !== code);
+    }
+    broadcastState();
+  });
+
   socket.on('admin:openReservations', () => {
     if (!socket.data.isAdmin) return;
     reservationsOpen = true;
@@ -237,95 +301,53 @@ socket.on('admin:login', (password) => {
   });
 
   socket.on('admin:start', () => {
-  if (!socket.data.isAdmin) return;
-  if (adminStarted) return;
-  adminStarted = true;
-  currentTurnIndex = reservations.findIndex(r => r.status === 'waiting' && !r.priorityLocked);
-  if (currentTurnIndex === -1) currentTurnIndex = -2;
-  tryAssignTurn();
-  broadcastState();
-});
-
-  function tryAssignTurn() {
-  if (currentTurnIndex < 0) return;
-  const res = reservations[currentTurnIndex];
-  if (!res) return;
-
-  const chosen = findAvailableSeats(res.size);
-  if (chosen) {
-    reserveSeatsTemporarily(res, chosen);
-    currentTurnDeadline = Date.now() + TURN_TIMEOUT_MS;
-    turnTimers[res.id] = setTimeout(() => handleTurnTimeout(res.id), TURN_TIMEOUT_MS);
-  } else {
-    res.skipCount += 1;
-    if (res.skipCount >= SKIP_CAP) res.priorityLocked = true;
-    advanceToNextEligible();
+    if (!socket.data.isAdmin) return;
+    if (adminStarted) return;
+    adminStarted = true;
+    currentTurnIndex = reservations.findIndex(r => r.status === 'waiting' && !r.priorityLocked);
+    if (currentTurnIndex === -1) currentTurnIndex = -2;
     tryAssignTurn();
-  }
-}
+    broadcastState();
+  });
 
-function handleTurnTimeout(resId) {
-  const res = reservations.find(r => r.id === resId);
-  if (!res || res.status !== 'waiting') return;
-  delete turnTimers[resId];
-
-  const unconfirmed = res.pendingSeatIds.filter(id => !res.confirmedSeatIds.includes(id));
-  for (const seatId of unconfirmed) {
-    const seat = seats.find(s => s.id === seatId);
-    if (seat) { seat.status = 'empty'; seat.occupiedBy = null; }
-  }
-
-  res.seatIds = [...res.confirmedSeatIds];
-  res.pendingSeatIds = [];
-  res.status = res.confirmedSeatIds.length > 0 ? 'assigned' : 'expired';
-  res.timedOut = true;
-
-  if (currentTurnIndex === reservations.indexOf(res)) {
-    currentTurnDeadline = null;
-    advanceToNextEligible();
-    tryAssignTurn();
-  }
-  checkPriorityLocked();
-  broadcastState();
-}
-
+  // 이제 "현재 차례"가 아니어도, 본인에게 배정된 좌석(pendingSeatIds)이 있으면 인증 가능
   socket.on('confirmSeat', ({ reservationId, seatId, className, number, name }) => {
-  if (currentTurnIndex < 0) return;
-  const res = reservations[currentTurnIndex];
-  if (!res || res.id !== reservationId) return;
+    const res = reservations.find(r => r.id === reservationId);
+    if (!res || !res.pendingSeatIds || res.pendingSeatIds.length === 0) return;
 
-  if (!res.pendingSeatIds.includes(seatId)) {
-    socket.emit('confirmSeat:error', '배정된 좌석이 아니에요');
-    return;
-  }
-  if (res.confirmedSeatIds.includes(seatId)) {
-    socket.emit('confirmSeat:error', '이미 확인된 좌석이에요');
-    return;
-  }
-  const alreadyDone = Object.values(res.seatConfirmedBy).some(
-    m => m.className === className && m.number === number
-  );
-  if (alreadyDone) {
-    socket.emit('confirmSeat:error', '이미 착석 인증을 완료했어요');
-    return;
-  }
+    if (!res.pendingSeatIds.includes(seatId)) {
+      socket.emit('confirmSeat:error', '배정된 좌석이 아니에요');
+      return;
+    }
+    if (res.confirmedSeatIds.includes(seatId)) {
+      socket.emit('confirmSeat:error', '이미 확인된 좌석이에요');
+      return;
+    }
+    const alreadyDone = Object.values(res.seatConfirmedBy).some(
+      m => m.className === className && m.number === number
+    );
+    if (alreadyDone) {
+      socket.emit('confirmSeat:error', '이미 착석 인증을 완료했어요');
+      return;
+    }
 
-  res.confirmedSeatIds.push(seatId);
-  res.seatConfirmedBy[seatId] = { className, number, name };
-  const seat = seats.find(s => s.id === seatId);
-  if (seat) seat.status = 'occupied';
-  socket.emit('confirmSeat:success');
+    res.confirmedSeatIds.push(seatId);
+    res.seatConfirmedBy[seatId] = { className, number, name };
+    const seat = seats.find(s => s.id === seatId);
+    if (seat) seat.status = 'occupied';
+    socket.emit('confirmSeat:success');
 
-  if (res.confirmedSeatIds.length >= res.size) {
-    clearTimeout(turnTimers[res.id]);
-    delete turnTimers[res.id];
-    finalizeAssignment(res);
-    currentTurnDeadline = null;
-    advanceToNextEligible();
-    tryAssignTurn();
-  }
-  broadcastState();
-});
+    if (res.confirmedSeatIds.length >= res.size) {
+      if (turnTimers[res.id]) { clearTimeout(turnTimers[res.id]); delete turnTimers[res.id]; }
+      finalizeAssignment(res);
+      if (currentTurnIndex === reservations.indexOf(res)) {
+        advanceToNextEligible();
+        tryAssignTurn();
+      }
+      checkPriorityLocked();
+    }
+    broadcastState();
+  });
 
   socket.on('release', ({ reservationId }) => {
     const res = reservations.find(r => r.id === reservationId);
@@ -347,20 +369,16 @@ function handleTurnTimeout(resId) {
     }
     const isMember = res.members.some(m => m.className === className && m.number === number);
     if (!isMember) return;
-  
-    if (turnTimers[res.id]) {
-      clearTimeout(turnTimers[res.id]);
-      delete turnTimers[res.id];
-      currentTurnDeadline = null;
-    }
+
+    if (turnTimers[res.id]) { clearTimeout(turnTimers[res.id]); delete turnTimers[res.id]; }
     for (const seatId of res.pendingSeatIds) {
       const seat = seats.find(s => s.id === seatId);
       if (seat) { seat.status = 'empty'; seat.occupiedBy = null; }
     }
-  
+
     const idx = reservations.indexOf(res);
     reservations.splice(idx, 1);
-  
+
     if (currentTurnIndex === idx) {
       currentTurnIndex -= 1;
       advanceToNextEligible();
@@ -368,7 +386,7 @@ function handleTurnTimeout(resId) {
     } else if (currentTurnIndex > idx) {
       currentTurnIndex -= 1;
     }
-  
+    checkPriorityLocked();
     broadcastState();
   });
 
@@ -376,7 +394,6 @@ function handleTurnTimeout(resId) {
     if (!socket.data.isAdmin) return;
     Object.values(turnTimers).forEach(t => clearTimeout(t));
     turnTimers = {};
-    currentTurnDeadline = null;
     reservations = [];
     pendingGroups = [];
     resetSeats();
