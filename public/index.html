@@ -388,42 +388,65 @@
     }
   }
 
-  function tryAdminLogin(){
-    const pw = document.getElementById('adminPasswordInput').value;
-    if(!pw){ showToast('비밀번호를 입력하세요'); return; }
+  // 학생/관리자 소켓이 공통으로 쓰는 이벤트 핸들러
+  function bindCommonHandlers(sock){
+    sock.on('state', (s) => { state = s; render(); });
+    sock.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
+    sock.on('group:joinError', (msg) => showToast(msg));
+    sock.on('group:submitError', (msg) => showToast(msg));
+    sock.on('reserve:error', (msg) => showToast(msg));
+    sock.on('cancel:error', (msg) => showToast(msg));
+    sock.on('confirmSeat:error', (msg) => { showToast(msg); awaitingConfirm = false; });
+    sock.on('confirmSeat:success', () => {
+      awaitingConfirm = false;
+      stopScan();
+      document.getElementById('turnAlert').classList.remove('active');
+      showToast('착석 인증 완료!');
+    });
+  }
 
+  // 관리자: 비밀번호로 로그인하거나(password), 저장된 토큰으로 복구한다(resume)
+  function connectAdmin(password){
     const adminSocket = io();
-    adminSocket.emit('admin:login', pw);
-    adminSocket.on('admin:loginResult', ({ success }) => {
+    let ready = false;
+
+    adminSocket.on('connect', () => {
+      const token = sessionStorage.getItem('lunchAdminToken');
+      // 재연결(이미 로그인했던 소켓)이거나 비밀번호 없이 토큰만 있으면 토큰으로 복구
+      if(token && (ready || !password)) adminSocket.emit('admin:resume', token);
+      else adminSocket.emit('admin:login', password);
+    });
+
+    adminSocket.on('admin:loginResult', ({ success, token, locked, retryAfterSec, resumed }) => {
       if(success){
-        sessionStorage.setItem('lunchAdminPw', pw);
+        sessionStorage.setItem('lunchAdminToken', token);
+        if(ready) return; // 재연결 복구 성공: UI는 이미 준비됨
+        ready = true;
         me = { className:'', number:'', name:'관리자', isAdmin:true };
         document.getElementById('loginScreen').style.display = 'none';
         document.getElementById('userLabel').textContent = '관리자 모드';
         document.getElementById('reserveCard').style.display = 'none';
         document.getElementById('adminCard').style.display = 'block';
-
+        document.getElementById('adminPasswordInput').value = '';
         socket = adminSocket;
-        socket.on('state', (s) => { state = s; render(); });
-        socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
-        socket.on('group:joinError', (msg) => showToast(msg));
-        socket.on('group:submitError', (msg) => showToast(msg));
-        socket.on('reserve:error', (msg) => showToast(msg));
-        socket.on('cancel:error', (msg) => showToast(msg));
-        socket.on('confirmSeat:error', (msg) => { showToast(msg); awaitingConfirm = false; });
-        socket.on('confirmSeat:success', () => {
-          awaitingConfirm = false;
-          stopScan();
-          document.getElementById('turnAlert').classList.remove('active');
-          showToast('착석 인증 완료!');
-        });
+        bindCommonHandlers(socket);
         loadMeal();
       } else {
-        sessionStorage.removeItem('lunchAdminPw');
-        showToast('비밀번호가 틀렸어요');
+        sessionStorage.removeItem('lunchAdminToken');
         adminSocket.disconnect();
+        if(ready){ location.reload(); return; } // 토큰 만료: 다시 로그인
+        if(resumed) return; // 자동 복구 실패: 조용히 로그인 화면 유지
+        showToast(locked
+          ? `시도 횟수 초과: ${Math.ceil(retryAfterSec / 60)}분 후 다시 시도하세요`
+          : '비밀번호가 틀렸어요');
       }
     });
+  }
+
+  function tryAdminLogin(){
+    const pw = document.getElementById('adminPasswordInput').value;
+    if(!pw){ showToast('비밀번호를 입력하세요'); return; }
+    connectAdmin(pw);
   }
 
   function login(isAdmin){
@@ -447,19 +470,7 @@
     document.getElementById('adminCard').style.display = 'none';
 
     socket = io();
-    socket.on('state', (s) => { state = s; render(); });
-    socket.on('group:created', ({ code }) => { showToast(`모둠 코드 발급: ${code}`); closeModal('modalGroup'); });
-    socket.on('group:joinError', (msg) => showToast(msg));
-    socket.on('group:submitError', (msg) => showToast(msg));
-    socket.on('reserve:error', (msg) => showToast(msg));
-    socket.on('cancel:error', (msg) => showToast(msg));
-    socket.on('confirmSeat:error', (msg) => { showToast(msg); awaitingConfirm = false; });
-    socket.on('confirmSeat:success', () => {
-      awaitingConfirm = false;
-      stopScan();
-      document.getElementById('turnAlert').classList.remove('active');
-      showToast('착석 인증 완료!');
-    });
+    bindCommonHandlers(socket);
     loadMeal();
   }
 
@@ -507,7 +518,7 @@
 
   function logout(){
     localStorage.removeItem('lunchUser');
-    sessionStorage.removeItem('lunchAdminPw');
+    sessionStorage.removeItem('lunchAdminToken');
     location.reload();
   }
 
@@ -915,10 +926,8 @@ if(pList.length){
 
   (function autoLogin(){
     try{
-      const adminPw = sessionStorage.getItem('lunchAdminPw');
-      if(adminPw){
-        document.getElementById('adminPasswordInput').value = adminPw;
-        tryAdminLogin();
+      if(sessionStorage.getItem('lunchAdminToken')){
+        connectAdmin(null);
         return;
       }
       const saved = JSON.parse(localStorage.getItem('lunchUser') || 'null');
