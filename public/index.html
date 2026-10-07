@@ -29,6 +29,7 @@
     --seat-full:#f03535e7;
     --seat-mine:#70ef59;
     --seat-pending:#f0b429;
+    --seat-held:#7b8bb5;
     --radius-lg:22px;
     --radius-md:16px;
   }
@@ -137,7 +138,7 @@
   #toast{
     position:absolute; bottom:96px; left:50%; transform:translateX(-50%) translateY(20px);
     background:var(--ink); color:#fff; padding:12px 22px; border-radius:30px;
-    font-size:13px; font-weight:600; opacity:0; transition:.3s; z-index:60; white-space:nowrap;
+    font-size:13px; font-weight:600; opacity:0; transition:.3s; z-index:60; white-space:nowrap; pointer-events:none;
     box-shadow:0 8px 20px rgba(0,0,0,.2);
   }
   #toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
@@ -191,6 +192,9 @@
   }
   .map-seat.full{background:var(--seat-full);}
   .map-seat.pending{background:var(--seat-pending);}
+  .map-seat.held{background:var(--seat-held);}
+  .map-seat.mine-held{background:var(--seat-mine); opacity:.6;}
+  .map-seat.selectable{cursor:pointer; outline:2px dashed var(--primary); outline-offset:1px;}
   .map-seat.mine{background:var(--seat-mine); box-shadow:0 0 0 2px #fff, 0 0 0 3px var(--seat-mine);}
   .map-small-table{ position:absolute; background:#fff; border:1.5px solid var(--line); border-radius:8px; padding:4px; }
   .seat-grid-small{ display:grid; gap:3px; }
@@ -238,6 +242,12 @@
         <div class="hero-row"><span class="hero-num" id="myQueueNum">-</span><span class="hero-unit">번째</span></div>
         <div class="hero-sub" id="currentServingText">아직 시작 전이에요</div>
         <button class="btn btn-outline" id="releaseBtn" style="display:none; margin-top:14px;" onclick="releaseSeat()">취식 완료 (퇴식)</button>
+      </div>
+
+      <div class="card" id="selectCard" style="display:none;">
+        <h2>🪑 좌석 선택</h2>
+        <div class="hero-sub" id="selectText" style="margin-bottom:12px;"></div>
+        <button class="btn btn-primary" id="selectGoBtn" onclick="goToMap()">좌석지도에서 고르기</button>
       </div>
 
       <div class="card" id="reserveCard">
@@ -289,6 +299,7 @@
         <span><i class="dot" style="background:var(--seat-full);"></i>착석중</span>
         <span><i class="dot" style="background:var(--seat-mine);"></i>내 자리</span>
         <span><i class="dot" style="background:var(--seat-pending);"></i>인증 대기중</span>
+        <span><i class="dot" style="background:var(--seat-held);"></i>자리예약됨</span>
       </div>
       <div class="map-viewport">
         <div class="map-canvas" id="mapCanvas"></div>
@@ -396,6 +407,8 @@
     sock.on('group:submitError', (msg) => showToast(msg));
     sock.on('reserve:error', (msg) => showToast(msg));
     sock.on('cancel:error', (msg) => showToast(msg));
+    sock.on('seat:error', (msg) => showToast(msg));
+    sock.on('seat:selected', ({ seatIds }) => showToast(`자리를 예약했어요: ${seatIds.join(', ')}`));
     sock.on('confirmSeat:error', (msg) => { showToast(msg); awaitingConfirm = false; });
     sock.on('confirmSeat:success', () => {
       awaitingConfirm = false;
@@ -647,6 +660,34 @@
     socket.emit('cancelReservation', { reservationId: mine.id, className: me.className, number: me.number });
   }
 
+  function isLeader(r){
+    return !!r && r.className === me.className && r.number === me.number;
+  }
+  function goToMap(){
+    switchScreen('screen-map', document.querySelector('.nav-item[data-screen="screen-map"]'));
+  }
+  // 시작 좌석부터 인원수만큼 같은 테이블에서 번호가 이어지는 빈자리 (서버와 같은 규칙, 미리 확인용)
+  function contiguousFrom(seatId, size){
+    const start = state.seats.find(s => s.id === seatId);
+    if(!start) return null;
+    const startNo = parseInt(start.id.slice(start.tableId.length), 10);
+    const picked = [];
+    for(let k = 0; k < size; k++){
+      const seat = state.seats.find(s => s.id === `${start.tableId}${startNo + k}`);
+      if(!seat || seat.status !== 'empty') return null;
+      picked.push(seat.id);
+    }
+    return picked;
+  }
+  function pickSeat(seatId){
+    const mine = state.reservations.find(isMine);
+    if(!mine || !mine.canSelect || !isLeader(mine)) return;
+    const picked = contiguousFrom(seatId, mine.size);
+    if(!picked){ showToast('자리가 부족합니다'); return; }
+    const label = picked.length > 1 ? `${picked[0]} ~ ${picked[picked.length-1]} (${picked.length}석)` : picked[0];
+    if(!confirm(`${label} 자리로 확정할까요?\n확정하면 바꿀 수 없어요.`)) return;
+    socket.emit('seat:select', { reservationId: mine.id, seatId, className: me.className, number: me.number });
+  }
   function isMine(r){
     return r.members.some(m => m.className === me.className && m.number === me.number);
   }
@@ -684,22 +725,26 @@
     state.seats.forEach(s => (byTable[s.tableId] ||= []).push(s));
 
     const mineSeats = mine ? mine.seatIds : [];
+    const myHeld = mine ? (mine.heldSeatIds || []) : [];
+    const canPick = !!mine && mine.canSelect && isLeader(mine);
     function seatClass(s){
       if(s.status === 'occupied') return mineSeats.includes(s.id) ? 'mine' : 'full';
       if(s.status === 'pending') return 'pending';
-      return '';
+      if(s.status === 'held') return myHeld.includes(s.id) ? 'mine-held' : 'held';
+      return canPick ? 'selectable' : '';
     }
     function makeSeatEl(s, size){
       const el = document.createElement('div');
       el.className = `map-seat ${seatClass(s)}`;
       if(size){ el.style.width = size+'px'; el.style.height = size+'px'; el.style.fontSize = '6.5px'; }
       el.textContent = s.id;
+      if(canPick && s.status === 'empty') el.onclick = () => pickSeat(s.id);
       return el;
     }
 
     const standardRows = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O'];
     const cellSize = 26, cellGap = 4;
-    const rowX = 170;
+    const rowX = 20;
     let y = 16;
 
     standardRows.forEach(letter => {
@@ -736,49 +781,6 @@
 
     const totalRowsHeight = y;
 
-    // ---- TABLE P: 대각선 통로 ----
-const pList = byTable['P'] || [];
-if(pList.length){
-  // 테이블별 [좌석수, 열수] — 8석은 2열×4행, 4석은 2열×2행
-  const tableDefs = [
-    [8,2],[8,2],[4,2],[8,4],[4,2],[8,4],[8,4],[4,2],[4,2]
-  ];
-  const pWrap = document.createElement('div');
-  pWrap.style.position = 'absolute';
-  pWrap.style.left = '40px';
-  pWrap.style.top = '720px';
-  container.appendChild(pWrap);
-
-  let idx = 0, py = 0;
-  tableDefs.forEach(([size, cols]) => {
-    const group = pList.slice(idx, idx + size);
-    idx += size;
-    const rows = Math.ceil(size / cols);
-
-    const small = document.createElement('div');
-    small.className = 'map-small-table';
-    small.style.position = 'absolute';
-    small.style.left = '0px';
-    small.style.top = py+'px';
-
-    const sg = document.createElement('div');
-    sg.className = 'seat-grid-small';
-    sg.style.gridTemplateColumns = `repeat(${cols}, 22px)`;
-    group.forEach(s => sg.appendChild(makeSeatEl(s, 22)));
-    small.appendChild(sg);
-    pWrap.appendChild(small);
-
-    py += rows*26 + 14;
-  });
-
-  const pLabel = document.createElement('div');
-  pLabel.className = 'map-row-label';
-  pLabel.style.left = '40px';
-  pLabel.style.top = '700px';
-  pLabel.textContent = 'TABLE P';
-  container.appendChild(pLabel);
-}
-
     container.style.width = (rowX + 380) + 'px';
     container.style.height = (totalRowsHeight + 40) + 'px';
   }
@@ -797,6 +799,8 @@ if(pList.length){
       if(mine.status === 'assigned'){ statusText = '배정 완료'; chipClass = 'chip-yellow'; }
       else if(mine.status === 'released'){ statusText = '퇴식 완료'; chipClass = 'chip-yellow'; }
       else if(hasPendingSeats(mine)){ statusText = '내 차례!'; chipClass = 'chip-danger'; }
+      else if(mine.heldSeatIds && mine.heldSeatIds.length > 0){ statusText = '자리 예약됨'; chipClass = 'chip-yellow'; }
+      else if(mine.canSelect){ statusText = '자리 선택 가능'; chipClass = 'chip-danger'; }
       else if(mine.priorityLocked){ statusText = '우선 확보 대기'; chipClass = 'chip-danger'; }
       else if(state.currentTurnIndex === idx){ statusText = '내 차례!'; chipClass = 'chip-danger'; }
       document.getElementById('statusChip').textContent = statusText;
@@ -818,6 +822,24 @@ if(pList.length){
         `현재 진행 순번: ${state.currentTurnIndex + 1}번`;
     }
 
+    const selectCard = document.getElementById('selectCard');
+    if(mine && mine.heldSeatIds && mine.heldSeatIds.length){
+      selectCard.style.display = 'block';
+      document.getElementById('selectText').textContent =
+        `예약한 자리: ${mine.heldSeatIds.join(', ')} · 내 차례가 되면 이 자리로 배정돼요`;
+      document.getElementById('selectGoBtn').style.display = 'none';
+    } else if(mine && mine.canSelect){
+      selectCard.style.display = 'block';
+      document.getElementById('selectText').textContent = isLeader(mine)
+        ? (mine.size > 1
+            ? `곧 우리 모둠 차례예요! 시작 좌석을 고르면 ${mine.size}석이 이어서 잡혀요.`
+            : '곧 내 차례예요! 원하는 자리를 미리 고를 수 있어요.')
+        : '곧 우리 모둠 차례예요! 자리는 모둠장이 골라요.';
+      document.getElementById('selectGoBtn').style.display = isLeader(mine) ? 'flex' : 'none';
+    } else {
+      selectCard.style.display = 'none';
+    }
+
     const hasReservation = !!mine;
     document.getElementById('reserveButtons').style.display = hasReservation ? 'none' : 'flex';
     document.getElementById('alreadyReservedBox').style.display = hasReservation ? 'block' : 'none';
@@ -827,8 +849,11 @@ if(pList.length){
       soloBtn.disabled = !state.reservationsOpen;
 
       const groupBtn = document.getElementById('groupReserveBtn');
-      groupBtn.disabled = !state.reservationsOpen || !myPendingGroup;
-      groupBtn.textContent = myPendingGroup ? `모둠 예약 (${myPendingGroup.members.length}명)` : '모둠 예약';
+      const iAmGroupLeader = !!myPendingGroup && myPendingGroup.members[0].className === me.className && myPendingGroup.members[0].number === me.number;
+      groupBtn.disabled = !state.reservationsOpen || !myPendingGroup || !iAmGroupLeader;
+      groupBtn.textContent = !myPendingGroup ? '모둠 예약'
+        : iAmGroupLeader ? `모둠 예약 (${myPendingGroup.members.length}명)`
+        : '모둠장만 예약 가능';
     } else {
       const cancelBtn = document.getElementById('cancelBtn');
       if(cancelBtn){
@@ -908,6 +933,7 @@ if(pList.length){
       if(r.status === 'assigned'){ tagClass='ok'; tagText=`배정 (${r.seatIds.join(',')})`; }
       else if(r.status === 'released'){ tagClass='ok'; tagText='퇴식 완료'; }
       else if(hasPendingSeats(r)){ tagClass='skip'; tagText=`대기중 QR: ${r.pendingSeatIds.join(',')}`; }
+      else if(r.heldSeatIds && r.heldSeatIds.length){ tagClass='ok'; tagText=`자리 예약: ${r.heldSeatIds.join(',')}`; }
       else if(r.priorityLocked){ tagClass='skip'; tagText='우선확보 대기'; }
       else if(i === state.currentTurnIndex){ tagClass='skip'; tagText='진행중 (좌석 미확정)'; }
       div.innerHTML = `<span>${i+1}. ${label}</span><span class="tag ${tagClass}">${tagText}</span>`;
