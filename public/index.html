@@ -375,6 +375,7 @@
   let prevMyStatus = null;
   let prevMyLocked = false;
   let prevIConfirmed = false;
+  let prevHadPending = false;
 
   let titleTapCount = 0;
   let titleTapTimer = null;
@@ -639,6 +640,10 @@
   function isMine(r){
     return r.members.some(m => m.className === me.className && m.number === me.number);
   }
+  // 차례 여부는 순번이 아니라 "배정된 좌석이 있는지"로 판단한다 (우선 확보 예약 포함)
+  function hasPendingSeats(r){
+    return !!r && r.status === 'waiting' && (r.pendingSeatIds || []).length > 0;
+  }
   function hasIConfirmed(r){
     if(!r || !r.seatConfirmedBy) return false;
     return Object.values(r.seatConfirmedBy).some(m => m.className === me.className && m.number === me.number);
@@ -648,11 +653,12 @@
   function startCountdownDisplay(){
     if(countdownInterval) return;
     countdownInterval = setInterval(() => {
-      if(!state || !state.turnDeadline){
+      const mineNow = state && state.reservations.find(isMine);
+      if(!mineNow || !mineNow.deadline){
         document.getElementById('turnCountdown').textContent = '';
         return;
       }
-      const remain = Math.max(0, state.turnDeadline - Date.now());
+      const remain = Math.max(0, mineNow.deadline - Date.now());
       const m = Math.floor(remain / 60000);
       const s = Math.floor((remain % 60000) / 1000);
       document.getElementById('turnCountdown').textContent = `${m}:${s.toString().padStart(2,'0')}`;
@@ -782,6 +788,7 @@ if(pList.length){
       let statusText = '대기중', chipClass = 'chip-orange';
       if(mine.status === 'assigned'){ statusText = '배정 완료'; chipClass = 'chip-yellow'; }
       else if(mine.status === 'released'){ statusText = '퇴식 완료'; chipClass = 'chip-yellow'; }
+      else if(hasPendingSeats(mine)){ statusText = '내 차례!'; chipClass = 'chip-danger'; }
       else if(mine.priorityLocked){ statusText = '우선 확보 대기'; chipClass = 'chip-danger'; }
       else if(state.currentTurnIndex === idx){ statusText = '내 차례!'; chipClass = 'chip-danger'; }
       document.getElementById('statusChip').textContent = statusText;
@@ -833,7 +840,7 @@ if(pList.length){
         noGroupBox.style.display = 'none';
         hasInfoBox.style.display = 'block';
         const confirmedCount = (mine.confirmedSeatIds || []).length;
-        const inProgress = state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting';
+        const inProgress = hasPendingSeats(mine);
         document.getElementById('groupInfoText').innerHTML =
           `코드 <b>${mine.groupCode}</b> · ${mine.members.map(m=>m.name).join(', ')} (${mine.members.length}명, 예약 확정)` +
           (inProgress ? `<br>착석 인증 ${confirmedCount}/${mine.size}명 완료` : '');
@@ -852,7 +859,7 @@ if(pList.length){
       }
     }
 
-    const myTurn = mine && state.currentTurnIndex === state.reservations.indexOf(mine) && mine.status === 'waiting' && !hasIConfirmed(mine);
+    const myTurn = mine && hasPendingSeats(mine) && !hasIConfirmed(mine);
     document.getElementById('turnAlert').classList.toggle('active', !!myTurn);
     if(myTurn && !scanning) startScan();
     if(!myTurn && scanning) stopScan();
@@ -866,11 +873,17 @@ if(pList.length){
       if(!prevMyLocked && mine.priorityLocked && mine.status === 'waiting'){
         showToast('자리가 없어 스킵됐어요. 우선 확보 대기중입니다');
       }
+      const hasPendingNow = hasPendingSeats(mine);
+      if(!prevHadPending && hasPendingNow && mine.priorityLocked){
+        showToast('자리가 났어요! 5분 안에 착석 인증을 해주세요');
+      }
+      prevHadPending = hasPendingNow;
       prevMyStatus = mine.status;
       prevMyLocked = mine.priorityLocked;
       prevIConfirmed = iConfirmedNow;
     } else {
       prevIConfirmed = false;
+      prevHadPending = false;
     }
 
     buildSeatMap(state, mine);
@@ -886,13 +899,9 @@ if(pList.length){
       let tagClass = 'wait', tagText = '대기중';
       if(r.status === 'assigned'){ tagClass='ok'; tagText=`배정 (${r.seatIds.join(',')})`; }
       else if(r.status === 'released'){ tagClass='ok'; tagText='퇴식 완료'; }
+      else if(hasPendingSeats(r)){ tagClass='skip'; tagText=`대기중 QR: ${r.pendingSeatIds.join(',')}`; }
       else if(r.priorityLocked){ tagClass='skip'; tagText='우선확보 대기'; }
-      else if(i === state.currentTurnIndex){
-        tagClass='skip';
-        tagText = r.pendingSeatIds && r.pendingSeatIds.length
-          ? `대기중 QR: ${r.pendingSeatIds.join(',')}`
-          : '진행중 (좌석 미확정)';
-      }
+      else if(i === state.currentTurnIndex){ tagClass='skip'; tagText='진행중 (좌석 미확정)'; }
       div.innerHTML = `<span>${i+1}. ${label}</span><span class="tag ${tagClass}">${tagText}</span>`;
       queueEl.appendChild(div);
     });
