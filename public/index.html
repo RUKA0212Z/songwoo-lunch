@@ -654,11 +654,11 @@
     if(countdownInterval) return;
     countdownInterval = setInterval(() => {
       const mineNow = state && state.reservations.find(isMine);
-      if(!mineNow || !mineNow.deadline){
+      if(!mineNow || !mineNow.turnDeadline){
         document.getElementById('turnCountdown').textContent = '';
         return;
       }
-      const remain = Math.max(0, mineNow.deadline - Date.now());
+      const remain = Math.max(0, mineNow.turnDeadline - Date.now());
       const m = Math.floor(remain / 60000);
       const s = Math.floor((remain % 60000) / 1000);
       document.getElementById('turnCountdown').textContent = `${m}:${s.toString().padStart(2,'0')}`;
@@ -695,7 +695,7 @@
     standardRows.forEach(letter => {
       const list = byTable[letter] || [];
       if(!list.length) return;
-      const cols = list.length / 2;
+      const cols = Math.ceil(list.length / 2);
       const tableW = cols*cellSize + (cols-1)*cellGap + 14;
       const tableH = 2*cellSize + cellGap + 14;
 
@@ -736,9 +736,7 @@ if(pList.length){
   const pWrap = document.createElement('div');
   pWrap.style.position = 'absolute';
   pWrap.style.left = '40px';
-  pWrap.style.top = '160px';
-  pWrap.style.transform = 'rotate(-4deg)';
-  pWrap.style.transformOrigin = 'top left';
+  pWrap.style.top = '720px';
   container.appendChild(pWrap);
 
   let idx = 0, py = 0;
@@ -764,14 +762,14 @@ if(pList.length){
   });
 
   const pLabel = document.createElement('div');
-  pLabel.className = 'map-label-static';
+  pLabel.className = 'map-row-label';
   pLabel.style.left = '40px';
-  pLabel.style.top = '138px';
+  pLabel.style.top = '700px';
   pLabel.textContent = 'TABLE P';
   container.appendChild(pLabel);
 }
 
-    container.style.width = (rowX + 480) + 'px';
+    container.style.width = (rowX + 380) + 'px';
     container.style.height = (totalRowsHeight + 40) + 'px';
   }
 
