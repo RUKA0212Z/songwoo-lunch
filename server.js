@@ -99,6 +99,7 @@ app.get('/api/meal', async (req, res) => {
 // ===== 좌석 배정 상태 =====
 const SKIP_CAP = 1;
 const MAX_GROUP_SIZE = 6;
+const SELECT_WINDOW = 3; // 내 앞 N번째 차례가 시작되면 좌석을 미리 고를 수 있다
 // 테스트할 때 TURN_TIMEOUT_SEC=20 처럼 주면 5분 대신 20초로 확인 가능
 const TURN_TIMEOUT_MS = (parseInt(process.env.TURN_TIMEOUT_SEC) || 300) * 1000;
 
@@ -132,10 +133,42 @@ function resetSeats() {
     ...rows20.flatMap(r => makeSeats(r, 20)),
     ...rows24.flatMap(r => makeSeats(r, 24)),
     ...rows202.flatMap(r => makeSeats(r, 20)),
-    ...makeSeats('P', 56),
   ];
 }
 resetSeats();
+
+// 내 차례가 오기 전에 몇 번째 앞인지 (1이면 바로 다음 차례).
+// 아직 배정 시작 전이면 대기열 앞에서부터, 시작했으면 현재 차례 다음부터 센다.
+function turnsUntil(idx) {
+  const from = adminStarted && currentTurnIndex >= 0 ? currentTurnIndex + 1 : 0;
+  if (idx < from) return 0;
+  let ahead = 0;
+  for (let i = from; i < idx; i++) {
+    if (reservations[i].status === 'waiting' && !reservations[i].priorityLocked) ahead++;
+  }
+  return ahead + 1;
+}
+
+function canSelectSeat(res) {
+  if (res.status !== 'waiting' || res.priorityLocked) return false;
+  if (res.pendingSeatIds.length || res.heldSeatIds.length) return false;
+  const dist = turnsUntil(reservations.indexOf(res));
+  return dist >= 1 && dist <= SELECT_WINDOW;
+}
+
+// startSeatId부터 같은 테이블에서 번호가 이어지는 size개의 좌석. 하나라도 비어있지 않으면 null
+function findContiguousSeats(startSeatId, size) {
+  const start = seats.find(s => s.id === startSeatId);
+  if (!start) return null;
+  const startNo = parseInt(start.id.slice(start.tableId.length), 10);
+  const picked = [];
+  for (let k = 0; k < size; k++) {
+    const seat = seats.find(s => s.id === `${start.tableId}${startNo + k}`);
+    if (!seat || seat.status !== 'empty') return null;
+    picked.push(seat);
+  }
+  return picked;
+}
 
 function findAvailableSeats(size) {
   const byTable = {};
@@ -202,7 +235,15 @@ function tryAssignTurn() {
   const res = reservations[currentTurnIndex];
   if (!res) return;
 
-  const chosen = findAvailableSeats(res.size);
+  // 미리 고른 자리가 있으면 그 자리를, 없으면 자동 배정
+  let chosen;
+  if (res.heldSeatIds.length) {
+    chosen = res.heldSeatIds.map(id => seats.find(s => s.id === id));
+    res.heldSeatIds = [];
+    for (const s of chosen) s.status = 'empty'; // 아래에서 pending 으로 바뀐다
+  } else {
+    chosen = findAvailableSeats(res.size);
+  }
   if (chosen) {
     grantSeatsAndStartTimer(res, chosen);
   } else {
@@ -248,6 +289,8 @@ function broadcastState() {
       status: r.status, seatIds: r.seatIds, pendingSeatIds: r.pendingSeatIds,
       confirmedSeatIds: r.confirmedSeatIds, seatConfirmedBy: r.seatConfirmedBy,
       turnDeadline: r.turnDeadline,
+      heldSeatIds: r.heldSeatIds,
+      canSelect: canSelectSeat(r),
     })),
     pendingGroups,
     currentTurnIndex,
@@ -260,7 +303,7 @@ function newReservation(base) {
   return {
     id: `r${Date.now()}${Math.floor(Math.random() * 1000)}`,
     skipCount: 0, priorityLocked: false, status: 'waiting',
-    seatIds: [], pendingSeatIds: [], confirmedSeatIds: [], seatConfirmedBy: {},
+    seatIds: [], pendingSeatIds: [], heldSeatIds: [], confirmedSeatIds: [], seatConfirmedBy: {},
     turnDeadline: null,
     ...base,
   };
@@ -345,8 +388,11 @@ io.on('connection', (socket) => {
     const idx = pendingGroups.findIndex(g => g.code === code);
     if (idx === -1) { socket.emit('group:submitError', '모둠 정보를 찾을 수 없어요'); return; }
     const group = pendingGroups[idx];
-    const isMember = group.members.some(m => m.className === className && m.number === number);
-    if (!isMember) return;
+    const leader = group.members[0];
+    if (leader.className !== className || leader.number !== number) {
+      socket.emit('group:submitError', '모둠장만 모둠 예약을 할 수 있어요');
+      return;
+    }
 
     pendingGroups.splice(idx, 1);
     reservations.push(newReservation({
@@ -385,6 +431,33 @@ io.on('connection', (socket) => {
     currentTurnIndex = reservations.findIndex(r => r.status === 'waiting' && !r.priorityLocked);
     if (currentTurnIndex === -1) currentTurnIndex = -2;
     tryAssignTurn();
+    broadcastState();
+  });
+
+  // 내 차례 전에 원하는 자리를 미리 고른다 (개인: 1석, 모둠: 시작 좌석부터 인원수만큼 연속)
+  socket.on('seat:select', ({ reservationId, seatId, className, number }) => {
+    const res = reservations.find(r => r.id === reservationId);
+    if (!res) return;
+    if (res.className !== className || res.number !== number) {
+      socket.emit('seat:error', res.type === 'group' ? '모둠장만 자리를 고를 수 있어요' : '본인 예약이 아니에요');
+      return;
+    }
+    if (res.heldSeatIds.length || res.pendingSeatIds.length) {
+      socket.emit('seat:error', '이미 자리를 예약했어요');
+      return;
+    }
+    if (!canSelectSeat(res)) {
+      socket.emit('seat:error', '아직 자리를 고를 수 없어요');
+      return;
+    }
+    const picked = findContiguousSeats(seatId, res.size);
+    if (!picked) {
+      socket.emit('seat:error', '자리가 부족합니다');
+      return;
+    }
+    res.heldSeatIds = picked.map(s => s.id);
+    for (const s of picked) { s.status = 'held'; s.occupiedBy = res.id; }
+    socket.emit('seat:selected', { seatIds: res.heldSeatIds });
     broadcastState();
   });
 
@@ -452,10 +525,11 @@ io.on('connection', (socket) => {
     if (!isMember) return;
 
     if (turnTimers[res.id]) { clearTimeout(turnTimers[res.id]); delete turnTimers[res.id]; }
-    for (const seatId of res.pendingSeatIds) {
+    for (const seatId of [...res.pendingSeatIds, ...res.heldSeatIds]) {
       const seat = seats.find(s => s.id === seatId);
       if (seat) { seat.status = 'empty'; seat.occupiedBy = null; }
     }
+    res.heldSeatIds = [];
 
     const idx = reservations.indexOf(res);
     reservations.splice(idx, 1);
