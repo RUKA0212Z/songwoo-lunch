@@ -313,7 +313,10 @@ io.on('connection', (socket) => {
   // 이제 "현재 차례"가 아니어도, 본인에게 배정된 좌석(pendingSeatIds)이 있으면 인증 가능
   socket.on('confirmSeat', ({ reservationId, seatId, className, number, name }) => {
     const res = reservations.find(r => r.id === reservationId);
-    if (!res || !res.pendingSeatIds || res.pendingSeatIds.length === 0) return;
+    if (!res || !res.pendingSeatIds || res.pendingSeatIds.length === 0) {
+      socket.emit('confirmSeat:error', '지금은 착석 인증을 할 수 없어요');
+      return;
+    }
 
     if (!res.pendingSeatIds.includes(seatId)) {
       socket.emit('confirmSeat:error', '배정된 좌석이 아니에요');
