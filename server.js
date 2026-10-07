@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
@@ -8,10 +9,63 @@ const io = new Server(server);
 
 app.use(express.static('public'));
 
-const ADMIN_PASSWORD = 'songwoo2026';
+// ===== 관리자 인증 =====
+// 비밀번호는 코드에 두지 않고 환경변수로만 받는다. 없으면 관리자 로그인을 막는다.
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+if (!ADMIN_PASSWORD) {
+  console.warn('[경고] ADMIN_PASSWORD 환경변수가 없어 관리자 로그인이 비활성화됩니다.');
+}
+const MAX_LOGIN_FAILS = 5;                    // 연속 실패 허용 횟수
+const LOGIN_LOCK_MS = 10 * 60 * 1000;         // 초과 시 잠금 시간 (10분)
+const ADMIN_TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 재연결용 토큰 유효기간 (12시간)
+
+const loginAttempts = new Map(); // ip -> { fails, lockedUntil }
+const adminTokens = new Map();   // token -> expiresAt
+
+function sha256(v) {
+  return crypto.createHash('sha256').update(String(v)).digest();
+}
+function passwordMatches(input) {
+  if (!ADMIN_PASSWORD || typeof input !== 'string' || input.length > 200) return false;
+  return crypto.timingSafeEqual(sha256(input), sha256(ADMIN_PASSWORD));
+}
+// 프록시(Render 등) 뒤에서는 프록시가 덧붙인 마지막 x-forwarded-for 값을 신뢰한다
+function clientIp(socket) {
+  const xff = socket.handshake.headers['x-forwarded-for'];
+  if (xff) return String(xff).split(',').pop().trim();
+  return socket.handshake.address;
+}
+function lockRemainingMs(ip) {
+  const a = loginAttempts.get(ip);
+  return a && a.lockedUntil > Date.now() ? a.lockedUntil - Date.now() : 0;
+}
+function recordLoginFailure(ip) {
+  const a = loginAttempts.get(ip) || { fails: 0, lockedUntil: 0 };
+  a.fails += 1;
+  if (a.fails >= MAX_LOGIN_FAILS) { a.lockedUntil = Date.now() + LOGIN_LOCK_MS; a.fails = 0; }
+  loginAttempts.set(ip, a);
+}
+function issueAdminToken() {
+  const token = crypto.randomBytes(32).toString('hex');
+  adminTokens.set(token, Date.now() + ADMIN_TOKEN_TTL_MS);
+  return token;
+}
+function tokenValid(token) {
+  if (typeof token !== 'string') return false;
+  const exp = adminTokens.get(token);
+  if (!exp) return false;
+  if (exp < Date.now()) { adminTokens.delete(token); return false; }
+  return true;
+}
+// 만료된 기록 정리
+setInterval(() => {
+  const now = Date.now();
+  for (const [t, exp] of adminTokens) if (exp < now) adminTokens.delete(t);
+  for (const [ip, a] of loginAttempts) if (a.lockedUntil < now && a.fails === 0) loginAttempts.delete(ip);
+}, 10 * 60 * 1000).unref();
 
 // ===== NEIS 급식 API =====
-const NEIS_KEY = process.env.NEIS_KEY || 'e0abd2795b4e49e0aabf24a60a04194c';
+const NEIS_KEY = process.env.NEIS_KEY || '';
 const OFFICE_CODE = 'J10';
 const SCHOOL_CODE = '7530806';
 
@@ -20,6 +74,9 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/api/meal', async (req, res) => {
+  if (!NEIS_KEY) {
+    return res.json({ date: '', menu: [], notice: '급식 정보를 불러올 수 없어요 (서버 설정 필요)' });
+  }
   const kstNow = new Date(Date.now() + 9 * 60 * 60 * 1000);
   const ymd = kstNow.toISOString().slice(0, 10).replace(/-/g, '');
   const url = `https://open.neis.go.kr/hub/mealServiceDietInfo?KEY=${NEIS_KEY}&Type=json&ATPT_OFCDC_SC_CODE=${OFFICE_CODE}&SD_SCHUL_CODE=${SCHOOL_CODE}&MLSV_YMD=${ymd}`;
@@ -213,11 +270,32 @@ io.on('connection', (socket) => {
   socket.data.isAdmin = false;
 
   socket.on('admin:login', (password) => {
-    if (password === ADMIN_PASSWORD) {
+    const ip = clientIp(socket);
+    const lockMs = lockRemainingMs(ip);
+    if (lockMs > 0) {
+      socket.emit('admin:loginResult', { success: false, locked: true, retryAfterSec: Math.ceil(lockMs / 1000) });
+      return;
+    }
+    if (passwordMatches(password)) {
+      loginAttempts.delete(ip);
       socket.data.isAdmin = true;
-      socket.emit('admin:loginResult', { success: true });
+      socket.emit('admin:loginResult', { success: true, token: issueAdminToken() });
     } else {
-      socket.emit('admin:loginResult', { success: false });
+      recordLoginFailure(ip);
+      const nowLocked = lockRemainingMs(ip);
+      socket.emit('admin:loginResult', nowLocked > 0
+        ? { success: false, locked: true, retryAfterSec: Math.ceil(nowLocked / 1000) }
+        : { success: false });
+    }
+  });
+
+  // 소켓이 재연결돼도 토큰으로 관리자 권한을 복구한다
+  socket.on('admin:resume', (token) => {
+    if (tokenValid(token)) {
+      socket.data.isAdmin = true;
+      socket.emit('admin:loginResult', { success: true, token, resumed: true });
+    } else {
+      socket.emit('admin:loginResult', { success: false, resumed: true });
     }
   });
 
