@@ -5,7 +5,11 @@ const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, { maxHttpBufferSize: 10 * 1024 }); // 비정상적으로 큰 요청 차단
+
+// 예기치 못한 오류로 서버 전체가 내려가지 않도록 기록만 남기고 계속 동작
+process.on('uncaughtException', (err) => console.error('[uncaughtException]', err));
+process.on('unhandledRejection', (err) => console.error('[unhandledRejection]', err));
 
 app.use(express.static('public', {
   setHeaders(res, filePath) {
@@ -105,6 +109,75 @@ app.get('/api/meal', async (req, res) => {
 const SKIP_CAP = 1;
 const MAX_GROUP_SIZE = 6;
 const SELECT_WINDOW = 3; // 내 앞 N번째 차례가 시작되면 좌석을 미리 고를 수 있다
+const MAX_NAME_LEN = 20;
+const MAX_PENDING_GROUPS = 300;
+
+// ===== 입력값 검증 =====
+// 소켓으로 들어오는 값은 전부 신뢰하지 않고, 형식이 맞는 값만 통과시킨다.
+const CLASS_RE = /^(?:[1-9]|10)$/;          // 1~10반
+const NUMBER_RE = /^(?:[1-9]|1\d|2[01])$/;   // 1~21번
+function cleanName(v) {
+  if (typeof v !== 'string') return null;
+  const n = v.normalize('NFC').replace(/\s+/g, ' ').trim();
+  if (!n || [...n].length > MAX_NAME_LEN) return null;
+  if (/[\u0000-\u001f\u007f<>]/.test(n)) return null;
+  return n;
+}
+function cleanIdentity(p) {
+  if (!p || typeof p !== 'object') return null;
+  if (typeof p.className !== 'string' || !CLASS_RE.test(p.className)) return null;
+  if (typeof p.number !== 'string' || !NUMBER_RE.test(p.number)) return null;
+  return { className: p.className, number: p.number };
+}
+function cleanUser(p) {
+  const id = cleanIdentity(p);
+  const name = id && cleanName(p.name);
+  return id && name ? { ...id, name } : null;
+}
+function cleanCode(v) {
+  if (typeof v !== 'string') return null;
+  const c = v.trim().toUpperCase();
+  return /^[A-Z0-9]{4}$/.test(c) ? c : null;
+}
+function cleanId(v) {
+  return typeof v === 'string' && /^[A-Za-z0-9]{1,64}$/.test(v) ? v : null;
+}
+function cleanSeatId(v) {
+  return typeof v === 'string' && /^[A-O]\d{1,2}$/.test(v) ? v : null;
+}
+function cleanPin(v) {
+  return typeof v === 'string' && /^\d{4}$/.test(v) ? v : null;
+}
+
+// ===== 학생 계정 (반/번호 + 학생이 정한 PIN 4자리) =====
+// 학교 코드 없이 신원을 지키기 위한 장치: 먼저 등록한 사람이 PIN 을 정하고, 이후 새 기기에서는 PIN 으로 로그인한다.
+// 지금은 메모리에만 저장한다(서버가 재시작되면 학생들은 PIN 을 다시 정한다). 저장소만 바꾸면 DB 로 옮길 수 있다.
+const MAX_PIN_FAILS = 5;
+const PIN_LOCK_MS = 10 * 60 * 1000;
+const MAX_DEVICES = 5;
+const accounts = new Map(); // "반:번호" -> { name, salt, pinHash, tokens: [sha256], fails, lockedUntil }
+
+const accountKey = (id) => `${id.className}:${id.number}`;
+const sha256hex = (v) => crypto.createHash('sha256').update(String(v)).digest('hex');
+const hashPin = (pin, salt) => crypto.scryptSync(pin, salt, 32);
+function pinMatches(acc, pin) {
+  return crypto.timingSafeEqual(hashPin(pin, acc.salt), acc.pinHash);
+}
+function addDevice(acc) {
+  const token = crypto.randomBytes(32).toString('hex');
+  acc.tokens.push(sha256hex(token));
+  if (acc.tokens.length > MAX_DEVICES) acc.tokens.shift();
+  return token;
+}
+function hasDevice(acc, token) {
+  return typeof token === 'string' && token.length <= 128 && acc.tokens.includes(sha256hex(token));
+}
+function createAccount(user, pin) {
+  const salt = crypto.randomBytes(16);
+  const acc = { name: user.name, salt, pinHash: hashPin(pin, salt), tokens: [], fails: 0, lockedUntil: 0 };
+  accounts.set(accountKey(user), acc);
+  return acc;
+}
 // 테스트할 때 TURN_TIMEOUT_SEC=20 처럼 주면 5분 대신 20초로 확인 가능
 const TURN_TIMEOUT_MS = (parseInt(process.env.TURN_TIMEOUT_SEC) || 300) * 1000;
 
@@ -202,7 +275,9 @@ function grantSeatsAndStartTimer(res, chosenSeats) {
   reserveSeatsTemporarily(res, chosenSeats);
   res.turnDeadline = Date.now() + TURN_TIMEOUT_MS;
   if (turnTimers[res.id]) clearTimeout(turnTimers[res.id]);
-  turnTimers[res.id] = setTimeout(() => handleTurnTimeout(res.id), TURN_TIMEOUT_MS);
+  turnTimers[res.id] = setTimeout(() => {
+    try { handleTurnTimeout(res.id); } catch (e) { console.error('[turn timeout]', e); }
+  }, TURN_TIMEOUT_MS);
 }
 
 function finalizeAssignment(res) {
@@ -314,10 +389,100 @@ function newReservation(base) {
   };
 }
 
+function sameUser(m, id) { return m.className === id.className && m.number === id.number; }
+function hasActiveReservation(id) {
+  return reservations.some(r => (r.status === 'waiting' || r.status === 'assigned') && r.members.some(m => sameUser(m, id)));
+}
+function inPendingGroup(id) {
+  return pendingGroups.some(g => g.members.some(m => sameUser(m, id)));
+}
+
 io.on('connection', (socket) => {
   socket.data.isAdmin = false;
 
-  socket.on('admin:login', (password) => {
+  // 모든 핸들러를 try/catch 로 감싸서, 잘못된 요청 하나가 서버를 멈추지 못하게 한다
+  const safeOn = (event, handler) => {
+    socket.on(event, (...args) => {
+      try { handler(...args); }
+      catch (e) { console.error(`[socket ${event}]`, e); socket.emit('app:error', '요청을 처리하지 못했어요'); }
+    });
+  };
+  const bad = (event) => socket.emit(event, '입력 정보가 올바르지 않아요');
+  // 요청에 적힌 반/번호/이름은 믿지 않고, 로그인 때 서버가 붙여 둔 신원만 사용한다
+  const authed = (errEvent) => {
+    const id = socket.data.identity;
+    if (!id) {
+      socket.emit(errEvent, '다시 로그인해 주세요');
+      socket.emit('auth:required');
+      return null;
+    }
+    return id;
+  };
+
+  safeOn('auth:login', (payload) => {
+    const reply = (r) => socket.emit('auth:result', r);
+    const user = cleanUser(payload);
+    if (!user) return reply({ ok: false, error: '입력 정보가 올바르지 않아요' });
+    const hasPin = payload.pin !== undefined && payload.pin !== null && payload.pin !== '';
+    const pin = hasPin ? cleanPin(payload.pin) : null;
+    if (hasPin && !pin) return reply({ ok: false, error: 'PIN은 숫자 4자리예요' });
+
+    const enter = (acc, token) => {
+      socket.data.identity = { className: user.className, number: user.number, name: acc.name };
+      reply({ ok: true, token, name: acc.name, className: user.className, number: user.number });
+    };
+
+    let acc = accounts.get(accountKey(user));
+    if (!acc) {                                   // 처음 쓰는 반/번호: PIN 을 정하면 등록
+      if (!pin) return reply({ ok: false, needSetup: true });
+      acc = createAccount(user, pin);
+      return enter(acc, addDevice(acc));
+    }
+    if (hasDevice(acc, payload.token)) return enter(acc, payload.token); // 이 기기는 이미 인증됨
+
+    if (acc.lockedUntil > Date.now()) {
+      return reply({ ok: false, locked: true, retryAfterSec: Math.ceil((acc.lockedUntil - Date.now()) / 1000) });
+    }
+    if (!pin) return reply({ ok: false, needPin: true });
+    if (pinMatches(acc, pin)) {
+      acc.fails = 0;
+      return enter(acc, addDevice(acc));
+    }
+    acc.fails += 1;
+    if (acc.fails >= MAX_PIN_FAILS) {
+      acc.fails = 0;
+      acc.lockedUntil = Date.now() + PIN_LOCK_MS;
+      return reply({ ok: false, locked: true, retryAfterSec: Math.ceil(PIN_LOCK_MS / 1000) });
+    }
+    reply({ ok: false, needPin: true, error: `PIN이 달라요 (${MAX_PIN_FAILS - acc.fails}번 남음)` });
+  });
+
+  // 이 기기의 로그인 해제 (토큰을 서버에서도 지운다)
+  safeOn('auth:logout', (payload) => {
+    const id = socket.data.identity;
+    if (id && payload && typeof payload.token === 'string') {
+      const acc = accounts.get(accountKey(id));
+      if (acc) acc.tokens = acc.tokens.filter(h => h !== sha256hex(payload.token));
+    }
+    socket.data.identity = null;
+  });
+
+  // 관리자: PIN 을 잊은 학생의 계정을 초기화 (그 학생은 PIN 을 다시 정한다)
+  safeOn('admin:resetAccount', (payload) => {
+    if (!socket.data.isAdmin) return;
+    const id = cleanIdentity(payload);
+    if (!id) return socket.emit('admin:resetAccountResult', { ok: false });
+    const existed = accounts.delete(accountKey(id));
+    for (const [, other] of io.sockets.sockets) {
+      if (other.data.identity && sameUser(other.data.identity, id)) {
+        other.data.identity = null;
+        other.emit('auth:revoked');
+      }
+    }
+    socket.emit('admin:resetAccountResult', { ok: true, existed, className: id.className, number: id.number });
+  });
+
+  safeOn('admin:login', (password) => {
     const ip = clientIp(socket);
     const lockMs = lockRemainingMs(ip);
     if (lockMs > 0) {
@@ -338,7 +503,7 @@ io.on('connection', (socket) => {
   });
 
   // 소켓이 재연결돼도 토큰으로 관리자 권한을 복구한다
-  socket.on('admin:resume', (token) => {
+  safeOn('admin:resume', (token) => {
     if (tokenValid(token)) {
       socket.data.isAdmin = true;
       socket.emit('admin:loginResult', { success: true, token, resumed: true });
@@ -349,8 +514,12 @@ io.on('connection', (socket) => {
 
   broadcastState();
 
-  socket.on('reserve:solo', ({ className, number, name }) => {
+  safeOn('reserve:solo', () => {
+    const user = authed('reserve:error');
+    if (!user) return;
+    const { className, number, name } = user;
     if (!reservationsOpen) { socket.emit('reserve:error', '아직 예약을 받지 않아요'); return; }
+    if (hasActiveReservation(user) || inPendingGroup(user)) { socket.emit('reserve:error', '이미 예약했거나 모둠에 참여 중이에요'); return; }
     reservations.push(newReservation({
       className, number, name, type: 'solo', size: 1,
       members: [{ className, number, name }],
@@ -362,14 +531,25 @@ io.on('connection', (socket) => {
     broadcastState();
   });
 
-  socket.on('group:create', ({ className, number, name }) => {
+  safeOn('group:create', () => {
+    const user = authed('group:joinError');
+    if (!user) return;
+    const { className, number, name } = user;
+    if (hasActiveReservation(user) || inPendingGroup(user)) { socket.emit('group:joinError', '이미 예약했거나 모둠에 참여 중이에요'); return; }
+    if (pendingGroups.length >= MAX_PENDING_GROUPS) { socket.emit('group:joinError', '지금은 모둠을 만들 수 없어요'); return; }
     const code = Math.random().toString(36).slice(2, 6).toUpperCase();
     pendingGroups.push({ code, members: [{ className, number, name }] });
     socket.emit('group:created', { code });
     broadcastState();
   });
 
-  socket.on('group:join', ({ className, number, name, code }) => {
+  safeOn('group:join', (payload) => {
+    const user = authed('group:joinError');
+    if (!user) return;
+    const code = cleanCode(payload && payload.code);
+    if (!code) return bad('group:joinError');
+    const { className, number, name } = user;
+    if (hasActiveReservation(user) || inPendingGroup(user)) { socket.emit('group:joinError', '이미 예약했거나 모둠에 참여 중이에요'); return; }
     const group = pendingGroups.find(g => g.code === code);
     if (!group) {
       socket.emit('group:joinError', '코드를 찾을 수 없어요');
@@ -388,7 +568,12 @@ io.on('connection', (socket) => {
     broadcastState();
   });
 
-  socket.on('group:submit', ({ code, className, number }) => {
+  safeOn('group:submit', (payload) => {
+    const id = authed('group:submitError');
+    if (!id) return;
+    const code = cleanCode(payload && payload.code);
+    if (!code) return bad('group:submitError');
+    const { className, number } = id;
     if (!reservationsOpen) { socket.emit('group:submitError', '아직 예약을 받지 않아요'); return; }
     const idx = pendingGroups.findIndex(g => g.code === code);
     if (idx === -1) { socket.emit('group:submitError', '모둠 정보를 찾을 수 없어요'); return; }
@@ -413,7 +598,12 @@ io.on('connection', (socket) => {
     broadcastState();
   });
 
-  socket.on('group:leave', ({ code, className, number }) => {
+  safeOn('group:leave', (payload) => {
+    const id = authed('app:error');
+    if (!id) return;
+    const code = cleanCode(payload && payload.code);
+    if (!code) return;
+    const { className, number } = id;
     const group = pendingGroups.find(g => g.code === code);
     if (!group) return;
     group.members = group.members.filter(m => !(m.className === className && m.number === number));
@@ -423,13 +613,13 @@ io.on('connection', (socket) => {
     broadcastState();
   });
 
-  socket.on('admin:openReservations', () => {
+  safeOn('admin:openReservations', () => {
     if (!socket.data.isAdmin) return;
     reservationsOpen = true;
     broadcastState();
   });
 
-  socket.on('admin:start', () => {
+  safeOn('admin:start', () => {
     if (!socket.data.isAdmin) return;
     if (adminStarted) return;
     adminStarted = true;
@@ -440,7 +630,13 @@ io.on('connection', (socket) => {
   });
 
   // 내 차례 전에 원하는 자리를 미리 고른다 (개인: 1석, 모둠: 시작 좌석부터 인원수만큼 연속)
-  socket.on('seat:select', ({ reservationId, seatId, className, number }) => {
+  safeOn('seat:select', (payload) => {
+    const id = authed('seat:error');
+    if (!id) return;
+    const reservationId = cleanId(payload && payload.reservationId);
+    const seatId = cleanSeatId(payload && payload.seatId);
+    if (!reservationId || !seatId) return bad('seat:error');
+    const { className, number } = id;
     const res = reservations.find(r => r.id === reservationId);
     if (!res) return;
     if (res.className !== className || res.number !== number) {
@@ -467,8 +663,18 @@ io.on('connection', (socket) => {
   });
 
   // 이제 "현재 차례"가 아니어도, 본인에게 배정된 좌석(pendingSeatIds)이 있으면 인증 가능
-  socket.on('confirmSeat', ({ reservationId, seatId, className, number, name }) => {
+  safeOn('confirmSeat', (payload) => {
+    const user = authed('confirmSeat:error');
+    if (!user) return;
+    const reservationId = cleanId(payload && payload.reservationId);
+    const seatId = cleanSeatId(payload && payload.seatId);
+    if (!reservationId || !seatId) return bad('confirmSeat:error');
+    const { className, number, name } = user;
     const res = reservations.find(r => r.id === reservationId);
+    if (res && !res.members.some(m => sameUser(m, user))) {   // 내 예약(또는 내 모둠)만 인증할 수 있다
+      socket.emit('confirmSeat:error', '내 예약이 아니에요');
+      return;
+    }
     if (!res || !res.pendingSeatIds || res.pendingSeatIds.length === 0) {
       socket.emit('confirmSeat:error', '지금은 착석 인증을 할 수 없어요');
       return;
@@ -508,9 +714,14 @@ io.on('connection', (socket) => {
     broadcastState();
   });
 
-  socket.on('release', ({ reservationId }) => {
+  safeOn('release', (payload) => {
+    const user = authed('app:error');
+    if (!user) return;
+    const reservationId = cleanId(payload && payload.reservationId);
+    if (!reservationId) return;
     const res = reservations.find(r => r.id === reservationId);
     if (!res || res.status !== 'assigned') return;
+    if (!res.members.some(m => sameUser(m, user))) return;   // 남의 자리는 반납할 수 없다
     for (const s of seats) {
       if (res.seatIds.includes(s.id)) { s.status = 'empty'; s.occupiedBy = null; }
     }
@@ -519,7 +730,12 @@ io.on('connection', (socket) => {
     broadcastState();
   });
 
-  socket.on('cancelReservation', ({ reservationId, className, number }) => {
+  safeOn('cancelReservation', (payload) => {
+    const id = authed('cancel:error');
+    if (!id) return;
+    const reservationId = cleanId(payload && payload.reservationId);
+    if (!reservationId) return bad('cancel:error');
+    const { className, number } = id;
     const res = reservations.find(r => r.id === reservationId);
     if (!res) return;
     if (res.status !== 'waiting') {
@@ -550,7 +766,7 @@ io.on('connection', (socket) => {
     broadcastState();
   });
 
-  socket.on('admin:reset', () => {
+  safeOn('admin:reset', () => {
     if (!socket.data.isAdmin) return;
     Object.values(turnTimers).forEach(t => clearTimeout(t));
     turnTimers = {};
