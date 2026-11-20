@@ -218,7 +218,7 @@
     <div class="login-card">
       <h2 id="loginTitle" onclick="handleTitleTap()" style="cursor:default;">급식줄 예약</h2>
       <div class="desc">반/번호/이름을 입력하고 입장하세요</div>
-      <input type="text" id="loginName" placeholder="이름">
+      <input type="text" id="loginName" placeholder="이름" maxlength="20" autocomplete="off">
       <div class="login-row">
         <select id="loginClass"></select>
         <select id="loginNumber"></select>
@@ -394,6 +394,11 @@
   for(let i=1;i<=10;i++){ const o=document.createElement('option'); o.value=i; o.textContent=`${i}반`; classSel.appendChild(o); }
   for(let i=1;i<=21;i++){ const o=document.createElement('option'); o.value=i; o.textContent=`${i}번`; numSel.appendChild(o); }
 
+  // 사용자 입력/외부 데이터를 innerHTML 에 넣을 때는 반드시 이스케이프한다 (XSS 방지)
+  function esc(v){
+    return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
   let me = { className:'', number:'', name:'', isAdmin:false };
   let socket = null;
   let state = null;
@@ -423,6 +428,7 @@
     sock.on('reserve:error', (msg) => showToast(msg));
     sock.on('cancel:error', (msg) => showToast(msg));
     sock.on('seat:error', (msg) => showToast(msg));
+    sock.on('app:error', (msg) => showToast(msg));
     sock.on('seat:selected', ({ seatIds }) => showToast(`자리를 예약했어요: ${seatIds.join(', ')}`));
     sock.on('confirmSeat:error', (msg) => { showToast(msg); awaitingConfirm = false; });
     sock.on('confirmSeat:success', () => {
@@ -482,11 +488,18 @@
     const className = classSel.value;
     const number = numSel.value;
 
+    const errEl = document.getElementById('loginError');
     if(!name){
-      document.getElementById('loginError').style.display = 'block';
+      errEl.textContent = '반/번호/이름을 모두 입력해주세요';
+      errEl.style.display = 'block';
       return;
     }
-    document.getElementById('loginError').style.display = 'none';
+    if([...name].length > 20 || /[\u0000-\u001f\u007f<>]/.test(name)){
+      errEl.textContent = '이름은 20자 이하이고 < > 문자는 쓸 수 없어요';
+      errEl.style.display = 'block';
+      return;
+    }
+    errEl.style.display = 'none';
 
     localStorage.setItem('lunchUser', JSON.stringify({ name, className, number }));
 
@@ -508,13 +521,13 @@
       const data = await res.json();
       const listEl = document.getElementById('mealList');
       if(!data.menu || data.menu.length === 0){
-        listEl.innerHTML = `<div class="hero-sub">${data.notice || '급식 정보가 없어요'}</div>`;
+        listEl.innerHTML = `<div class="hero-sub">${esc(data.notice || '급식 정보가 없어요')}</div>`;
         return;
       }
       document.getElementById('mealDate').textContent =
         `${data.date.slice(0,4)}년 ${data.date.slice(4,6)}월 ${data.date.slice(6,8)}일 · 중식`;
       listEl.innerHTML = data.menu.map(item =>
-        `<div class="menu-item"><span class="menu-icon">🍽️</span><span>${item}</span></div>`
+        `<div class="menu-item"><span class="menu-icon">🍽️</span><span>${esc(item)}</span></div>`
       ).join('');
     }catch(e){ console.error(e); }
   }
@@ -890,7 +903,7 @@
         const confirmedCount = (mine.confirmedSeatIds || []).length;
         const inProgress = hasPendingSeats(mine);
         document.getElementById('groupInfoText').innerHTML =
-          `코드 <b>${mine.groupCode}</b> · ${mine.members.map(m=>m.name).join(', ')} (${mine.members.length}명, 예약 확정)` +
+          `코드 <b>${esc(mine.groupCode)}</b> · ${esc(mine.members.map(m=>m.name).join(', '))} (${mine.members.length}명, 예약 확정)` +
           (inProgress ? `<br>착석 인증 ${confirmedCount}/${mine.size}명 완료` : '');
         document.getElementById('groupSkipChip').style.display = mine.priorityLocked ? 'inline-flex' : 'none';
         document.getElementById('groupLeaveBtn').style.display = 'none';
@@ -898,7 +911,7 @@
         noGroupBox.style.display = 'none';
         hasInfoBox.style.display = 'block';
         document.getElementById('groupInfoText').innerHTML =
-          `코드 <b>${myPendingGroup.code}</b> · ${myPendingGroup.members.map(m=>m.name).join(', ')} (${myPendingGroup.members.length}명 참여 중)`;
+          `코드 <b>${esc(myPendingGroup.code)}</b> · ${esc(myPendingGroup.members.map(m=>m.name).join(', '))} (${myPendingGroup.members.length}명 참여 중)`;
         document.getElementById('groupSkipChip').style.display = 'none';
         document.getElementById('groupLeaveBtn').style.display = 'block';
       } else {
@@ -951,7 +964,7 @@
       else if(r.heldSeatIds && r.heldSeatIds.length){ tagClass='ok'; tagText=`자리 예약: ${r.heldSeatIds.join(',')}`; }
       else if(r.priorityLocked){ tagClass='skip'; tagText='우선확보 대기'; }
       else if(i === state.currentTurnIndex){ tagClass='skip'; tagText='진행중 (좌석 미확정)'; }
-      div.innerHTML = `<span>${i+1}. ${label}</span><span class="tag ${tagClass}">${tagText}</span>`;
+      div.innerHTML = `<span>${i+1}. ${esc(label)}</span><span class="tag ${tagClass}">${esc(tagText)}</span>`;
       queueEl.appendChild(div);
     });
 
