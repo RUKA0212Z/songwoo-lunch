@@ -4,6 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>급식줄 예약</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#39b7c3">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="급식예약">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
 <script src="/socket.io/socket.io.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <style>
@@ -234,6 +242,13 @@
   <div class="content-area">
 
     <div class="screen active" id="screen-home">
+      <div class="card" id="installCard" style="display:none; margin-top:14px;">
+        <h2>📲 앱처럼 설치하기</h2>
+        <div class="hero-sub" id="installText" style="margin-bottom:12px;"></div>
+        <button class="btn btn-primary" id="installBtn" style="display:none;" onclick="installApp()">홈 화면에 앱 설치</button>
+        <button class="btn btn-ghost" onclick="dismissInstall()">다시 보지 않기</button>
+      </div>
+
       <div class="hero-card">
         <div class="hero-top">
           <span class="hero-label"><span class="live-dot"></span>내 대기 순번</span>
@@ -949,6 +964,59 @@
       openBtn.disabled = state.reservationsOpen;
     }
   }
+
+  // ===== 앱 설치(PWA) =====
+  let deferredInstallPrompt = null;
+  function isStandalone(){
+    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  }
+  function installDismissed(){
+    try{ return localStorage.getItem('lunchInstallDismissed') === '1'; }catch(e){ return false; }
+  }
+  function dismissInstall(){
+    try{ localStorage.setItem('lunchInstallDismissed', '1'); }catch(e){}
+    document.getElementById('installCard').style.display = 'none';
+  }
+  function showInstallCard(){
+    if(isStandalone() || installDismissed()) return;
+    const ua = navigator.userAgent;
+    const isIOS = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
+    const textEl = document.getElementById('installText');
+    const btn = document.getElementById('installBtn');
+    if(isIOS){
+      textEl.textContent = '사파리 아래쪽의 공유 버튼(□↑)을 누르고 "홈 화면에 추가"를 선택하면 앱처럼 설치돼요.';
+      btn.style.display = 'none';
+    } else if(deferredInstallPrompt){
+      textEl.textContent = '홈 화면에 설치하면 앱처럼 바로 열 수 있어요.';
+      btn.style.display = 'flex';
+    } else {
+      textEl.textContent = '브라우저 메뉴(⋮)에서 "앱 설치" 또는 "홈 화면에 추가"를 선택하면 앱처럼 설치돼요.';
+      btn.style.display = 'none';
+    }
+    document.getElementById('installCard').style.display = 'block';
+  }
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    showInstallCard();
+  });
+  window.addEventListener('appinstalled', () => {
+    deferredInstallPrompt = null;
+    document.getElementById('installCard').style.display = 'none';
+  });
+  async function installApp(){
+    if(!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    document.getElementById('installCard').style.display = 'none';
+  }
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch((e) => console.error('SW 등록 실패', e));
+    });
+  }
+  showInstallCard();
 
   (function autoLogin(){
     try{
