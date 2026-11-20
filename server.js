@@ -145,6 +145,39 @@ function cleanId(v) {
 function cleanSeatId(v) {
   return typeof v === 'string' && /^[A-O]\d{1,2}$/.test(v) ? v : null;
 }
+function cleanPin(v) {
+  return typeof v === 'string' && /^\d{4}$/.test(v) ? v : null;
+}
+
+// ===== 학생 계정 (반/번호 + 학생이 정한 PIN 4자리) =====
+// 학교 코드 없이 신원을 지키기 위한 장치: 먼저 등록한 사람이 PIN 을 정하고, 이후 새 기기에서는 PIN 으로 로그인한다.
+// 지금은 메모리에만 저장한다(서버가 재시작되면 학생들은 PIN 을 다시 정한다). 저장소만 바꾸면 DB 로 옮길 수 있다.
+const MAX_PIN_FAILS = 5;
+const PIN_LOCK_MS = 10 * 60 * 1000;
+const MAX_DEVICES = 5;
+const accounts = new Map(); // "반:번호" -> { name, salt, pinHash, tokens: [sha256], fails, lockedUntil }
+
+const accountKey = (id) => `${id.className}:${id.number}`;
+const sha256hex = (v) => crypto.createHash('sha256').update(String(v)).digest('hex');
+const hashPin = (pin, salt) => crypto.scryptSync(pin, salt, 32);
+function pinMatches(acc, pin) {
+  return crypto.timingSafeEqual(hashPin(pin, acc.salt), acc.pinHash);
+}
+function addDevice(acc) {
+  const token = crypto.randomBytes(32).toString('hex');
+  acc.tokens.push(sha256hex(token));
+  if (acc.tokens.length > MAX_DEVICES) acc.tokens.shift();
+  return token;
+}
+function hasDevice(acc, token) {
+  return typeof token === 'string' && token.length <= 128 && acc.tokens.includes(sha256hex(token));
+}
+function createAccount(user, pin) {
+  const salt = crypto.randomBytes(16);
+  const acc = { name: user.name, salt, pinHash: hashPin(pin, salt), tokens: [], fails: 0, lockedUntil: 0 };
+  accounts.set(accountKey(user), acc);
+  return acc;
+}
 // 테스트할 때 TURN_TIMEOUT_SEC=20 처럼 주면 5분 대신 20초로 확인 가능
 const TURN_TIMEOUT_MS = (parseInt(process.env.TURN_TIMEOUT_SEC) || 300) * 1000;
 
@@ -375,6 +408,79 @@ io.on('connection', (socket) => {
     });
   };
   const bad = (event) => socket.emit(event, '입력 정보가 올바르지 않아요');
+  // 요청에 적힌 반/번호/이름은 믿지 않고, 로그인 때 서버가 붙여 둔 신원만 사용한다
+  const authed = (errEvent) => {
+    const id = socket.data.identity;
+    if (!id) {
+      socket.emit(errEvent, '다시 로그인해 주세요');
+      socket.emit('auth:required');
+      return null;
+    }
+    return id;
+  };
+
+  safeOn('auth:login', (payload) => {
+    const reply = (r) => socket.emit('auth:result', r);
+    const user = cleanUser(payload);
+    if (!user) return reply({ ok: false, error: '입력 정보가 올바르지 않아요' });
+    const hasPin = payload.pin !== undefined && payload.pin !== null && payload.pin !== '';
+    const pin = hasPin ? cleanPin(payload.pin) : null;
+    if (hasPin && !pin) return reply({ ok: false, error: 'PIN은 숫자 4자리예요' });
+
+    const enter = (acc, token) => {
+      socket.data.identity = { className: user.className, number: user.number, name: acc.name };
+      reply({ ok: true, token, name: acc.name, className: user.className, number: user.number });
+    };
+
+    let acc = accounts.get(accountKey(user));
+    if (!acc) {                                   // 처음 쓰는 반/번호: PIN 을 정하면 등록
+      if (!pin) return reply({ ok: false, needSetup: true });
+      acc = createAccount(user, pin);
+      return enter(acc, addDevice(acc));
+    }
+    if (hasDevice(acc, payload.token)) return enter(acc, payload.token); // 이 기기는 이미 인증됨
+
+    if (acc.lockedUntil > Date.now()) {
+      return reply({ ok: false, locked: true, retryAfterSec: Math.ceil((acc.lockedUntil - Date.now()) / 1000) });
+    }
+    if (!pin) return reply({ ok: false, needPin: true });
+    if (pinMatches(acc, pin)) {
+      acc.fails = 0;
+      return enter(acc, addDevice(acc));
+    }
+    acc.fails += 1;
+    if (acc.fails >= MAX_PIN_FAILS) {
+      acc.fails = 0;
+      acc.lockedUntil = Date.now() + PIN_LOCK_MS;
+      return reply({ ok: false, locked: true, retryAfterSec: Math.ceil(PIN_LOCK_MS / 1000) });
+    }
+    reply({ ok: false, needPin: true, error: `PIN이 달라요 (${MAX_PIN_FAILS - acc.fails}번 남음)` });
+  });
+
+  // 이 기기의 로그인 해제 (토큰을 서버에서도 지운다)
+  safeOn('auth:logout', (payload) => {
+    const id = socket.data.identity;
+    if (id && payload && typeof payload.token === 'string') {
+      const acc = accounts.get(accountKey(id));
+      if (acc) acc.tokens = acc.tokens.filter(h => h !== sha256hex(payload.token));
+    }
+    socket.data.identity = null;
+  });
+
+  // 관리자: PIN 을 잊은 학생의 계정을 초기화 (그 학생은 PIN 을 다시 정한다)
+  safeOn('admin:resetAccount', (payload) => {
+    if (!socket.data.isAdmin) return;
+    const id = cleanIdentity(payload);
+    if (!id) return socket.emit('admin:resetAccountResult', { ok: false });
+    const existed = accounts.delete(accountKey(id));
+    for (const [, other] of io.sockets.sockets) {
+      if (other.data.identity && sameUser(other.data.identity, id)) {
+        other.data.identity = null;
+        other.emit('auth:revoked');
+      }
+    }
+    socket.emit('admin:resetAccountResult', { ok: true, existed, className: id.className, number: id.number });
+  });
 
   safeOn('admin:login', (password) => {
     const ip = clientIp(socket);
@@ -408,9 +514,9 @@ io.on('connection', (socket) => {
 
   broadcastState();
 
-  safeOn('reserve:solo', (payload) => {
-    const user = cleanUser(payload);
-    if (!user) return bad('reserve:error');
+  safeOn('reserve:solo', () => {
+    const user = authed('reserve:error');
+    if (!user) return;
     const { className, number, name } = user;
     if (!reservationsOpen) { socket.emit('reserve:error', '아직 예약을 받지 않아요'); return; }
     if (hasActiveReservation(user) || inPendingGroup(user)) { socket.emit('reserve:error', '이미 예약했거나 모둠에 참여 중이에요'); return; }
@@ -425,9 +531,9 @@ io.on('connection', (socket) => {
     broadcastState();
   });
 
-  safeOn('group:create', (payload) => {
-    const user = cleanUser(payload);
-    if (!user) return bad('group:joinError');
+  safeOn('group:create', () => {
+    const user = authed('group:joinError');
+    if (!user) return;
     const { className, number, name } = user;
     if (hasActiveReservation(user) || inPendingGroup(user)) { socket.emit('group:joinError', '이미 예약했거나 모둠에 참여 중이에요'); return; }
     if (pendingGroups.length >= MAX_PENDING_GROUPS) { socket.emit('group:joinError', '지금은 모둠을 만들 수 없어요'); return; }
@@ -438,9 +544,10 @@ io.on('connection', (socket) => {
   });
 
   safeOn('group:join', (payload) => {
-    const user = cleanUser(payload);
+    const user = authed('group:joinError');
+    if (!user) return;
     const code = cleanCode(payload && payload.code);
-    if (!user || !code) return bad('group:joinError');
+    if (!code) return bad('group:joinError');
     const { className, number, name } = user;
     if (hasActiveReservation(user) || inPendingGroup(user)) { socket.emit('group:joinError', '이미 예약했거나 모둠에 참여 중이에요'); return; }
     const group = pendingGroups.find(g => g.code === code);
@@ -462,9 +569,10 @@ io.on('connection', (socket) => {
   });
 
   safeOn('group:submit', (payload) => {
-    const id = cleanIdentity(payload);
+    const id = authed('group:submitError');
+    if (!id) return;
     const code = cleanCode(payload && payload.code);
-    if (!id || !code) return bad('group:submitError');
+    if (!code) return bad('group:submitError');
     const { className, number } = id;
     if (!reservationsOpen) { socket.emit('group:submitError', '아직 예약을 받지 않아요'); return; }
     const idx = pendingGroups.findIndex(g => g.code === code);
@@ -491,9 +599,10 @@ io.on('connection', (socket) => {
   });
 
   safeOn('group:leave', (payload) => {
-    const id = cleanIdentity(payload);
+    const id = authed('app:error');
+    if (!id) return;
     const code = cleanCode(payload && payload.code);
-    if (!id || !code) return;
+    if (!code) return;
     const { className, number } = id;
     const group = pendingGroups.find(g => g.code === code);
     if (!group) return;
@@ -522,10 +631,11 @@ io.on('connection', (socket) => {
 
   // 내 차례 전에 원하는 자리를 미리 고른다 (개인: 1석, 모둠: 시작 좌석부터 인원수만큼 연속)
   safeOn('seat:select', (payload) => {
-    const id = cleanIdentity(payload);
+    const id = authed('seat:error');
+    if (!id) return;
     const reservationId = cleanId(payload && payload.reservationId);
     const seatId = cleanSeatId(payload && payload.seatId);
-    if (!id || !reservationId || !seatId) return bad('seat:error');
+    if (!reservationId || !seatId) return bad('seat:error');
     const { className, number } = id;
     const res = reservations.find(r => r.id === reservationId);
     if (!res) return;
@@ -554,12 +664,17 @@ io.on('connection', (socket) => {
 
   // 이제 "현재 차례"가 아니어도, 본인에게 배정된 좌석(pendingSeatIds)이 있으면 인증 가능
   safeOn('confirmSeat', (payload) => {
-    const user = cleanUser(payload);
+    const user = authed('confirmSeat:error');
+    if (!user) return;
     const reservationId = cleanId(payload && payload.reservationId);
     const seatId = cleanSeatId(payload && payload.seatId);
-    if (!user || !reservationId || !seatId) return bad('confirmSeat:error');
+    if (!reservationId || !seatId) return bad('confirmSeat:error');
     const { className, number, name } = user;
     const res = reservations.find(r => r.id === reservationId);
+    if (res && !res.members.some(m => sameUser(m, user))) {   // 내 예약(또는 내 모둠)만 인증할 수 있다
+      socket.emit('confirmSeat:error', '내 예약이 아니에요');
+      return;
+    }
     if (!res || !res.pendingSeatIds || res.pendingSeatIds.length === 0) {
       socket.emit('confirmSeat:error', '지금은 착석 인증을 할 수 없어요');
       return;
@@ -600,10 +715,13 @@ io.on('connection', (socket) => {
   });
 
   safeOn('release', (payload) => {
+    const user = authed('app:error');
+    if (!user) return;
     const reservationId = cleanId(payload && payload.reservationId);
     if (!reservationId) return;
     const res = reservations.find(r => r.id === reservationId);
     if (!res || res.status !== 'assigned') return;
+    if (!res.members.some(m => sameUser(m, user))) return;   // 남의 자리는 반납할 수 없다
     for (const s of seats) {
       if (res.seatIds.includes(s.id)) { s.status = 'empty'; s.occupiedBy = null; }
     }
@@ -613,9 +731,10 @@ io.on('connection', (socket) => {
   });
 
   safeOn('cancelReservation', (payload) => {
-    const id = cleanIdentity(payload);
+    const id = authed('cancel:error');
+    if (!id) return;
     const reservationId = cleanId(payload && payload.reservationId);
-    if (!id || !reservationId) return bad('cancel:error');
+    if (!reservationId) return bad('cancel:error');
     const { className, number } = id;
     const res = reservations.find(r => r.id === reservationId);
     if (!res) return;

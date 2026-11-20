@@ -304,6 +304,14 @@
         <button class="btn btn-orange" id="openBtn" onclick="adminOpenReservations()">예약 시작</button>
         <button class="btn btn-primary" id="startBtn" style="margin-top:10px;" onclick="adminStart()">좌석 배정 시작</button>
         <button class="btn btn-outline" style="margin-top:10px;" onclick="adminReset()">전체 초기화</button>
+        <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--line);">
+          <div class="hero-sub" style="margin-bottom:6px;">PIN을 잊은 학생 계정 초기화</div>
+          <div class="login-row">
+            <select id="resetClass"></select>
+            <select id="resetNumber"></select>
+          </div>
+          <button class="btn btn-outline" onclick="adminResetAccount()">이 학생 PIN 초기화</button>
+        </div>
       </div>
 
     </div>
@@ -372,6 +380,18 @@
     </div>
   </div>
 
+  <div class="modal-bg" id="modalPin" style="z-index:200;">
+    <div class="modal">
+      <h3 id="pinTitle">PIN 입력</h3>
+      <p class="hero-sub" id="pinDesc" style="margin-bottom:10px;"></p>
+      <input type="password" id="pinInput" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="PIN 4자리" autocomplete="off">
+      <input type="password" id="pinConfirm" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="PIN 다시 입력" autocomplete="off" style="display:none;">
+      <div id="pinError" style="color:var(--danger); font-size:12.5px; margin-top:8px; min-height:16px;"></div>
+      <button class="btn btn-primary" style="margin-top:10px;" onclick="submitPin()">확인</button>
+      <button class="btn btn-ghost" onclick="cancelPin()">취소</button>
+    </div>
+  </div>
+
   <div id="toast"></div>
 
   <div class="navbar">
@@ -393,6 +413,10 @@
   const numSel = document.getElementById('loginNumber');
   for(let i=1;i<=10;i++){ const o=document.createElement('option'); o.value=i; o.textContent=`${i}반`; classSel.appendChild(o); }
   for(let i=1;i<=21;i++){ const o=document.createElement('option'); o.value=i; o.textContent=`${i}번`; numSel.appendChild(o); }
+  const resetClassSel = document.getElementById('resetClass');
+  const resetNumSel = document.getElementById('resetNumber');
+  for(let i=1;i<=10;i++){ const o=document.createElement('option'); o.value=i; o.textContent=`${i}반`; resetClassSel.appendChild(o); }
+  for(let i=1;i<=21;i++){ const o=document.createElement('option'); o.value=i; o.textContent=`${i}번`; resetNumSel.appendChild(o); }
 
   // 사용자 입력/외부 데이터를 innerHTML 에 넣을 때는 반드시 이스케이프한다 (XSS 방지)
   function esc(v){
@@ -464,6 +488,8 @@
         document.getElementById('adminPasswordInput').value = '';
         socket = adminSocket;
         bindCommonHandlers(socket);
+        socket.on('admin:resetAccountResult', (r) => showToast(!r.ok ? '초기화하지 못했어요'
+          : r.existed ? `${r.className}반 ${r.number}번 PIN을 초기화했어요` : `${r.className}반 ${r.number}번은 아직 등록되지 않았어요`));
         loadMeal();
       } else {
         sessionStorage.removeItem('lunchAdminToken');
@@ -505,14 +531,90 @@
 
     me = { className, number, name, isAdmin: false };
 
+    // 화면 입장은 서버가 신원을 확인한 뒤(auth:result ok)에 한다
+    if(!socket){
+      socket = io();
+      bindCommonHandlers(socket);
+      bindStudentAuth(socket);
+    } else if(socket.connected){
+      sendAuth();
+    }
+  }
+
+  // ===== 학생 인증 (반/번호 + 기기 토큰 + PIN) =====
+  let entered = false;
+  let pinMode = 'enter';
+
+  function savedAuthToken(){
+    try{
+      const a = JSON.parse(localStorage.getItem('lunchAuth') || 'null');
+      return a && a.className === me.className && a.number === me.number ? a.token : null;
+    }catch(e){ return null; }
+  }
+  function saveAuthToken(token){
+    try{ localStorage.setItem('lunchAuth', JSON.stringify({ className: me.className, number: me.number, token })); }catch(e){}
+  }
+  function sendAuth(pin){
+    socket.emit('auth:login', { className: me.className, number: me.number, name: me.name, token: savedAuthToken(), pin });
+  }
+  function enterApp(){
+    document.getElementById('userLabel').textContent = `${me.className}반 ${me.number}번 · ${me.name}`;
+    if(entered) return;
+    entered = true;
     document.getElementById('loginScreen').style.display = 'none';
-    document.getElementById('userLabel').textContent = `${className}반 ${number}번 · ${name}`;
     document.getElementById('reserveCard').style.display = 'block';
     document.getElementById('adminCard').style.display = 'none';
-
-    socket = io();
-    bindCommonHandlers(socket);
     loadMeal();
+  }
+  function showPinModal(mode, err){
+    pinMode = mode;
+    const setup = mode === 'setup';
+    document.getElementById('pinTitle').textContent = setup ? 'PIN 정하기' : 'PIN 입력';
+    document.getElementById('pinDesc').textContent = setup
+      ? '처음이에요! 다른 기기에서 로그인할 때 쓸 PIN 숫자 4자리를 정해주세요. 잊어버리면 관리자에게 초기화를 요청해야 해요.'
+      : '이 기기에서는 처음이에요. 정해둔 PIN 숫자 4자리를 입력해주세요.';
+    document.getElementById('pinInput').value = '';
+    document.getElementById('pinConfirm').value = '';
+    document.getElementById('pinConfirm').style.display = setup ? 'block' : 'none';
+    document.getElementById('pinError').textContent = err || '';
+    openModal('modalPin');
+    setTimeout(() => document.getElementById('pinInput').focus(), 50);
+  }
+  function submitPin(){
+    const pin = document.getElementById('pinInput').value.trim();
+    const errEl = document.getElementById('pinError');
+    if(!/^\d{4}$/.test(pin)){ errEl.textContent = 'PIN은 숫자 4자리예요'; return; }
+    if(pinMode === 'setup' && document.getElementById('pinConfirm').value.trim() !== pin){
+      errEl.textContent = '두 PIN이 달라요'; return;
+    }
+    errEl.textContent = '';
+    sendAuth(pin);
+  }
+  function cancelPin(){ closeModal('modalPin'); }
+  function bindStudentAuth(sock){
+    sock.on('connect', () => sendAuth());
+    sock.on('auth:result', (r) => {
+      if(r.ok){
+        saveAuthToken(r.token);
+        me.name = r.name;
+        closeModal('modalPin');
+        enterApp();
+      } else if(r.locked){
+        showPinModal(pinMode, `PIN을 너무 많이 틀렸어요. ${Math.ceil(r.retryAfterSec / 60)}분 후에 다시 시도해주세요`);
+      } else if(r.needSetup){
+        showPinModal('setup');
+      } else if(r.needPin){
+        showPinModal('enter', r.error);
+      } else {
+        showToast(r.error || '로그인하지 못했어요');
+      }
+    });
+    sock.on('auth:required', () => sendAuth());
+    sock.on('auth:revoked', () => {
+      try{ localStorage.removeItem('lunchAuth'); }catch(e){}
+      showToast('계정이 초기화됐어요. 다시 로그인해주세요');
+      setTimeout(() => location.reload(), 1500);
+    });
   }
 
   async function loadMeal(){
@@ -558,9 +660,12 @@
   }
 
   function logout(){
+    const token = savedAuthToken();
+    if(socket && token) socket.emit('auth:logout', { token });
     localStorage.removeItem('lunchUser');
+    localStorage.removeItem('lunchAuth');
     sessionStorage.removeItem('lunchAdminToken');
-    location.reload();
+    setTimeout(() => location.reload(), 150);
   }
 
   function reserveSolo(){
@@ -594,6 +699,11 @@
   function adminOpenReservations(){ socket.emit('admin:openReservations'); }
   function adminStart(){ socket.emit('admin:start'); }
   function adminReset(){ socket.emit('admin:reset'); }
+  function adminResetAccount(){
+    const className = resetClassSel.value, number = resetNumSel.value;
+    if(!confirm(`${className}반 ${number}번 학생의 PIN을 초기화할까요?\n그 학생은 다시 PIN을 정해야 해요.`)) return;
+    socket.emit('admin:resetAccount', { className, number });
+  }
 
   let scanStream = null;
   let scanRAF = null;
