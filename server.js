@@ -7,7 +7,12 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-app.use(express.static('public'));
+app.use(express.static('public', {
+  setHeaders(res, filePath) {
+    // 서비스 워커와 매니페스트는 항상 최신본을 확인하게 한다
+    if (/(sw\.js|manifest\.webmanifest)$/.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
+  },
+}));
 
 // ===== 관리자 인증 =====
 // 비밀번호는 코드에 두지 않고 환경변수로만 받는다. 없으면 관리자 로그인을 막는다.
