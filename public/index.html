@@ -137,6 +137,9 @@
   #turnAlert.active{display:flex;}
   #turnAlert .label{color:#ffd9d3; font-size:13px; letter-spacing:1.5px; font-weight:700;}
   #turnAlert .seatnum{font-size:38px; font-weight:800; margin:16px 0 8px; letter-spacing:-1px;}
+  #turnAlert .turn-seats{margin:14px 0 0; font-size:12px; font-weight:700; letter-spacing:1px; color:#ffe7e2;}
+  #turnAlert .seat-chip{display:inline-block; margin:6px 4px 0; padding:6px 16px; border-radius:16px; background:rgba(255,255,255,.2); color:#fff; font-size:30px; font-weight:800; letter-spacing:.5px;}
+  #turnAlert .seat-chip.done{background:#fff; color:var(--primary);}
   .scan-circle{
     width:150px; height:150px; border-radius:50%; border:2px dashed rgba(255,255,255,.4);
     display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;
@@ -242,6 +245,12 @@
   <div class="content-area">
 
     <div class="screen active" id="screen-home">
+      <div class="card" id="pushCard" style="display:none; margin-top:14px;">
+        <h2>🔔 내 차례 알림</h2>
+        <div class="hero-sub" id="pushText" style="margin-bottom:12px;"></div>
+        <button class="btn btn-primary" id="pushBtn" onclick="enablePush()">알림 켜기</button>
+      </div>
+
       <div class="card" id="installCard" style="display:none; margin-top:14px;">
         <h2>📲 앱처럼 설치하기</h2>
         <div class="hero-sub" id="installText" style="margin-bottom:12px;"></div>
@@ -345,6 +354,7 @@
 
   <div id="turnAlert">
     <div class="label">내 차례입니다</div>
+    <div class="turn-seats" id="turnSeats"></div>
     <div class="seatnum" id="turnCountdown">5:00</div>
     <video id="scanVideo" autoplay playsinline muted></video>
     <canvas id="scanCanvas"></canvas>
@@ -599,6 +609,7 @@
         me.name = r.name;
         closeModal('modalPin');
         enterApp();
+        setupPush();
       } else if(r.locked){
         showPinModal(pinMode, `PIN을 너무 많이 틀렸어요. ${Math.ceil(r.retryAfterSec / 60)}분 후에 다시 시도해주세요`);
       } else if(r.needSetup){
@@ -1032,6 +1043,13 @@
 
     const myTurn = mine && hasPendingSeats(mine) && !hasIConfirmed(mine);
     document.getElementById('turnAlert').classList.toggle('active', !!myTurn);
+    if(myTurn){
+      const conf = mine.confirmedSeatIds || [];
+      document.getElementById('turnSeats').innerHTML =
+        '<div>내 자리</div>' +
+        mine.pendingSeatIds.map(id => `<span class="seat-chip${conf.includes(id) ? ' done' : ''}">${esc(id)}${conf.includes(id) ? ' ✓' : ''}</span>`).join('') +
+        '<div style="margin-top:8px;">자리에 앉아 그 자리의 QR을 찍어주세요</div>';
+    }
     if(myTurn && !scanning) startScan();
     if(!myTurn && scanning) stopScan();
     startCountdownDisplay();
@@ -1085,6 +1103,85 @@
     if(openBtn){
       openBtn.textContent = state.reservationsOpen ? '예약 받는 중' : '예약 시작';
       openBtn.disabled = state.reservationsOpen;
+    }
+  }
+
+  // ===== 푸시 알림 =====
+  let pushKey = null;
+  function urlB64ToU8(b64){
+    const pad = '='.repeat((4 - b64.length % 4) % 4);
+    const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(raw, c => c.charCodeAt(0));
+  }
+  function pushSupported(){
+    return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  }
+  async function setupPush(){
+    if(me.isAdmin) return;
+    try{
+      const r = await fetch('/api/push-key');
+      if(!r.ok) return;
+      pushKey = (await r.json()).key;
+    }catch(e){ return; }
+    updatePushCard();
+    // 서버가 재시작되면 구독 정보가 사라지므로, 로그인할 때마다 다시 등록한다
+    if(pushSupported() && Notification.permission === 'granted') ensurePushSubscribed(false);
+  }
+  function updatePushCard(){
+    const card = document.getElementById('pushCard');
+    const text = document.getElementById('pushText');
+    const btn = document.getElementById('pushBtn');
+    const hide = () => { card.style.display = 'none'; };
+    if(!pushKey || me.isAdmin){ hide(); return; }
+    if(!pushSupported()){
+      const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if(isIOS && !isStandalone()){
+        text.textContent = '아이폰은 "홈 화면에 추가"로 설치한 앱에서만 알림을 받을 수 있어요.';
+        btn.style.display = 'none';
+        card.style.display = 'block';
+      } else hide();
+      return;
+    }
+    if(Notification.permission === 'granted'){ hide(); return; }
+    if(Notification.permission === 'denied'){
+      text.textContent = '알림이 차단돼 있어요. 폰이나 브라우저 설정에서 이 사이트의 알림을 허용해주세요.';
+      btn.style.display = 'none';
+    } else {
+      text.textContent = '내 차례가 되면 알려드려요. 몇 번 자리인지도 함께 보여줘요.';
+      btn.style.display = 'flex';
+    }
+    card.style.display = 'block';
+  }
+  async function enablePush(){
+    try{
+      const perm = await Notification.requestPermission();
+      if(perm === 'granted') await ensurePushSubscribed(true);
+    }catch(e){ console.error(e); }
+    updatePushCard();
+  }
+  async function ensurePushSubscribed(withToast){
+    try{
+      const reg = await navigator.serviceWorker.ready;
+      const opts = { userVisibleOnly: true, applicationServerKey: urlB64ToU8(pushKey) };
+      let sub = await reg.pushManager.getSubscription();
+      if(!sub){
+        sub = await reg.pushManager.subscribe(opts);
+      }
+      socket.emit('push:subscribe', { subscription: sub.toJSON() });
+      if(withToast) showToast('알림을 켰어요');
+    }catch(e){
+      // 서버 키가 바뀌어 기존 구독이 맞지 않으면 지우고 다시 만든다
+      try{
+        const reg = await navigator.serviceWorker.ready;
+        const old = await reg.pushManager.getSubscription();
+        if(old) await old.unsubscribe();
+        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToU8(pushKey) });
+        socket.emit('push:subscribe', { subscription: sub.toJSON() });
+        if(withToast) showToast('알림을 켰어요');
+      }catch(e2){
+        console.error('push 구독 실패', e2);
+        if(withToast) showToast('알림을 켜지 못했어요');
+      }
     }
   }
 

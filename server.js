@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
+const webpush = require('web-push');
 
 const app = express();
 const server = http.createServer(app);
@@ -72,6 +73,26 @@ setInterval(() => {
   for (const [t, exp] of adminTokens) if (exp < now) adminTokens.delete(t);
   for (const [ip, a] of loginAttempts) if (a.lockedUntil < now && a.fails === 0) loginAttempts.delete(ip);
 }, 10 * 60 * 1000).unref();
+
+// ===== 푸시 알림 (웹 푸시) =====
+// VAPID 키가 없으면 알림 기능만 꺼지고 나머지는 정상 동작한다.
+// 키 만들기: npx web-push generate-vapid-keys
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@songwoo-lunch.invalid';
+let pushEnabled = !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+if (pushEnabled) {
+  try { webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY); }
+  catch (e) { console.error('[경고] VAPID 키가 올바르지 않아 푸시 알림을 끕니다:', e.message); pushEnabled = false; }
+} else {
+  console.warn('[안내] VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY 가 없어 푸시 알림이 비활성화됩니다. (npx web-push generate-vapid-keys)');
+}
+const MAX_PUSH_SUBS = 5;
+
+app.get('/api/push-key', (req, res) => {
+  if (!pushEnabled) return res.status(404).json({ error: 'push disabled' });
+  res.json({ key: VAPID_PUBLIC_KEY });
+});
 
 // ===== NEIS 급식 API =====
 const NEIS_KEY = process.env.NEIS_KEY || '';
@@ -148,6 +169,14 @@ function cleanSeatId(v) {
 function cleanPin(v) {
   return typeof v === 'string' && /^\d{4}$/.test(v) ? v : null;
 }
+function cleanSubscription(v) {
+  if (!v || typeof v !== 'object' || typeof v.endpoint !== 'string' || !v.keys || typeof v.keys !== 'object') return null;
+  const { endpoint } = v;
+  const { p256dh, auth } = v.keys;
+  if (endpoint.length > 600 || !/^https:\/\//.test(endpoint)) return null;
+  if (typeof p256dh !== 'string' || typeof auth !== 'string' || p256dh.length > 200 || auth.length > 100) return null;
+  return { endpoint, keys: { p256dh, auth } };
+}
 
 // ===== 학생 계정 (반/번호 + 학생이 정한 PIN 4자리) =====
 // 학교 코드 없이 신원을 지키기 위한 장치: 먼저 등록한 사람이 PIN 을 정하고, 이후 새 기기에서는 PIN 으로 로그인한다.
@@ -174,9 +203,61 @@ function hasDevice(acc, token) {
 }
 function createAccount(user, pin) {
   const salt = crypto.randomBytes(16);
-  const acc = { name: user.name, salt, pinHash: hashPin(pin, salt), tokens: [], fails: 0, lockedUntil: 0 };
+  const acc = { name: user.name, salt, pinHash: hashPin(pin, salt), tokens: [], fails: 0, lockedUntil: 0, push: [] };
   accounts.set(accountKey(user), acc);
   return acc;
+}
+
+// ===== 푸시 발송 =====
+function sendPush(identity, payload) {
+  if (!pushEnabled) return;
+  const acc = accounts.get(accountKey(identity));
+  if (!acc || !acc.push.length) return;
+  const body = JSON.stringify(payload);
+  for (const sub of [...acc.push]) {
+    webpush.sendNotification(sub, body, { TTL: 120, urgency: 'high' }).catch((err) => {
+      if (err && (err.statusCode === 404 || err.statusCode === 410)) {
+        acc.push = acc.push.filter(x => x.endpoint !== sub.endpoint);   // 만료된 구독 정리
+      } else {
+        console.error('[push 실패]', err && (err.statusCode || err.message));
+      }
+    });
+  }
+}
+function seatLabel(ids) { return ids.join(', '); }
+function durationText(ms) {
+  return ms >= 60000 ? `${Math.round(ms / 60000)}분` : `${Math.round(ms / 1000)}초`;
+}
+
+// 상태가 바뀔 때마다 호출: 새로 알려야 할 사람에게만 한 번씩 알림을 보낸다
+function dispatchPushes() {
+  if (!pushEnabled) return;
+  for (const r of reservations) {
+    if (r.status !== 'waiting') continue;
+    if (r.pendingSeatIds.length) {
+      // 좌석이 배정됨 (일반 차례, 우선 확보 모두) -> 모둠원 전원에게, 몇 번 자리인지 같이
+      if (r.pushedTurnFor !== r.turnDeadline) {
+        r.pushedTurnFor = r.turnDeadline;
+        const payload = {
+          title: '내 차례예요! 🍽️',
+          body: `${seatLabel(r.pendingSeatIds)} 자리예요. ${durationText(TURN_TIMEOUT_MS)} 안에 QR을 찍어 인증하세요.`,
+          tag: 'turn', urgent: true,
+        };
+        for (const m of r.members) sendPush(m, payload);
+      }
+    } else if (!r.pushedSelect && canSelectSeat(r)) {
+      // 좌석을 미리 고를 수 있게 됨 -> 선택 권한이 있는 사람(개인 본인, 모둠장)에게
+      r.pushedSelect = true;
+      const ahead = turnsUntil(reservations.indexOf(r));
+      sendPush(r.members[0], {
+        title: '곧 내 차례예요',
+        body: adminStarted && ahead > 0
+          ? `앞으로 ${ahead}번째예요. 지금 원하는 자리를 미리 고를 수 있어요.`
+          : '곧 좌석 배정이 시작돼요. 지금 원하는 자리를 미리 고를 수 있어요.',
+        tag: 'select', urgent: false,
+      });
+    }
+  }
 }
 // 테스트할 때 TURN_TIMEOUT_SEC=20 처럼 주면 5분 대신 20초로 확인 가능
 const TURN_TIMEOUT_MS = (parseInt(process.env.TURN_TIMEOUT_SEC) || 300) * 1000;
@@ -377,6 +458,7 @@ function broadcastState() {
     adminStarted,
     reservationsOpen,
   });
+  try { dispatchPushes(); } catch (e) { console.error('[push dispatch]', e); }
 }
 
 function newReservation(base) {
@@ -455,6 +537,20 @@ io.on('connection', (socket) => {
       return reply({ ok: false, locked: true, retryAfterSec: Math.ceil(PIN_LOCK_MS / 1000) });
     }
     reply({ ok: false, needPin: true, error: `PIN이 달라요 (${MAX_PIN_FAILS - acc.fails}번 남음)` });
+  });
+
+  // 이 기기의 푸시 알림 구독 등록 (같은 기기를 다른 학생이 쓰면 이전 학생 구독은 지운다)
+  safeOn('push:subscribe', (payload) => {
+    const id = authed('app:error');
+    if (!id) return;
+    const sub = cleanSubscription(payload && payload.subscription);
+    if (!sub) return bad('app:error');
+    const acc = accounts.get(accountKey(id));
+    if (!acc) return;
+    for (const other of accounts.values()) other.push = other.push.filter(x => x.endpoint !== sub.endpoint);
+    acc.push.push(sub);
+    if (acc.push.length > MAX_PUSH_SUBS) acc.push.shift();
+    socket.emit('push:subscribed');
   });
 
   // 이 기기의 로그인 해제 (토큰을 서버에서도 지운다)
